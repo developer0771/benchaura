@@ -1,0 +1,38 @@
+// ─── app/layout.tsx ──────────────────────────────────────────────────────────
+// Root layout — wraps every page.
+// This is where global fonts, styles, and the auth listener live.
+
+import type { Metadata } from 'next';
+import './globals.css';
+import { AuthProvider } from '@/components/layout/AuthProvider';
+
+export const metadata: Metadata = {
+  title: 'Benchaura — Study Together, Grow Together',
+  description: 'Real-time video collaboration for students. Create a room, invite your class, and learn side by side.',
+  openGraph: {
+    title: 'Benchaura',
+    description: 'Real-time video collaboration for students.',
+    type: 'website',
+  },
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap"
+          rel="stylesheet"
+        />
+      </head>
+      <body>
+        {/* AuthProvider starts the Firebase auth listener once at the root */}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
+      </body>
+    </html>
+  );
+}
