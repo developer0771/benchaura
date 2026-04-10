@@ -23,7 +23,7 @@ interface RTCIceCandidateInit {
   sdpMLineIndex?: number | null;
   usernameFragment?: string | null;
 }
-import express from 'express';
+import express, { Request, Response } from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
@@ -64,14 +64,14 @@ app.use(generalLimiter);
 app.use(Sentry.expressErrorHandler());
 
 // ── Health check ──────────────────────────────────────────────────────────────
-app.get('/health', (_req, res) => {
+app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', uptime: process.uptime(), ts: Date.now() });
 });
 
 // ── ICE servers endpoint ──────────────────────────────────────────────────────
 // Client calls this on room mount to get fresh TURN credentials.
 // Credentials are short-lived (1hr) and IP-bound — safe to expose per-request.
-app.get('/ice-servers', iceLimiter, async (req, res) => {
+app.get('/ice-servers', iceLimiter, async (req: Request, res: Response) => {
   try {
     const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.ip || '';
     const servers = await getIceServers(clientIp);
