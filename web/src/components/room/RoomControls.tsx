@@ -50,7 +50,7 @@ export function RoomControls({
           title={isSharingScreen ? 'Stop Sharing' : 'Share Screen'}
         >
           <span className="ctrl-icon">{isSharingScreen ? '⏹️' : '🖥️'}</span>
-          <span className="ctrl-label">{isSharingScreen ? 'Stop' : 'Share'}</span>
+          <span className="ctrl-label">{isSharingScreen ? 'Stop' : 'Screen Share'}</span>
         </button>
 
         {/* Chat */}

@@ -10,13 +10,6 @@
 'use client';
 import { Component, type ReactNode, type ErrorInfo } from 'react';
 
-let Sentry: { captureException: (err: Error, ctx?: object) => void } | null = null;
-try {
-  Sentry = require('@sentry/nextjs');
-} catch {
-  // Sentry not installed — error reporting disabled
-}
-
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
@@ -37,7 +30,6 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('[ErrorBoundary]', error, info);
-    Sentry?.captureException(error, { extra: { componentStack: info.componentStack } });
     this.props.onError?.(error, info);
   }
 

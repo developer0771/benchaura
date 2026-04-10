@@ -116,6 +116,22 @@ export default function RoomPage({ params }: RoomPageProps) {
     navigator.clipboard.writeText(roomCode).then(() => toast('Room code copied!'));
   }
 
+  // ── Share invite link ────────────────────────────────────────────────────
+  function handleShareLink() {
+    const baseUrl = window.location.origin;
+    const shareUrl = `${baseUrl}/join?room=${roomCode}`;
+
+    if (navigator.share) {
+      navigator.share({
+        title: 'Join my Benchaura room',
+        text: `Join my study room on Benchaura! Room code: ${roomCode}`,
+        url: shareUrl,
+      }).catch(() => {});
+    } else {
+      navigator.clipboard.writeText(shareUrl).then(() => toast('🔗 Invite link copied!'));
+    }
+  }
+
   // ── Toggle mute ───────────────────────────────────────────────────────────
   function handleToggleMute() {
     toggleMute();
@@ -131,28 +147,50 @@ export default function RoomPage({ params }: RoomPageProps) {
   // ── Screen share ──────────────────────────────────────────────────────────
   const { setSharing, isSharingScreen } = useRoomStore();
 
+  // Replace video track on all peer connections with the given track
+  const replaceTrackOnPeers = useCallback((newTrack: MediaStreamTrack) => {
+    peerConnections.current.forEach((pc) => {
+      const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+      if (sender) {
+        sender.replaceTrack(newTrack).catch(console.error);
+      }
+    });
+  }, [peerConnections]);
+
+  const stopScreenShare = useCallback(() => {
+    screenStream?.getTracks().forEach(t => t.stop());
+    setScreenStream(null);
+    setSharing(false);
+    // Restore camera track on all peer connections
+    const cameraTrack = localStream?.getVideoTracks()[0];
+    if (cameraTrack) replaceTrackOnPeers(cameraTrack);
+    toast('⏹️ Screen sharing stopped');
+  }, [screenStream, setSharing, localStream, replaceTrackOnPeers]);
+
   const handleToggleScreen = useCallback(async () => {
     if (isSharingScreen) {
-      screenStream?.getTracks().forEach(t => t.stop());
-      setScreenStream(null);
-      setSharing(false);
-      toast('⏹️ Screen sharing stopped');
+      stopScreenShare();
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
       setScreenStream(stream);
       setSharing(true);
+
+      // Replace camera track with screen track on all peer connections
+      const screenTrack = stream.getVideoTracks()[0];
+      replaceTrackOnPeers(screenTrack);
+
       toast('🖥️ Screen sharing started');
-      stream.getVideoTracks()[0].addEventListener('ended', () => {
-        setScreenStream(null);
-        setSharing(false);
-        toast('⏹️ Screen sharing stopped');
+
+      // Handle user clicking browser's "Stop sharing" button
+      screenTrack.addEventListener('ended', () => {
+        stopScreenShare();
       });
     } catch {
       toast('Screen sharing cancelled');
     }
-  }, [isSharingScreen, screenStream, setSharing]);
+  }, [isSharingScreen, setSharing, replaceTrackOnPeers, stopScreenShare]);
 
   // ── Leave room ────────────────────────────────────────────────────────────
   const handleLeave = useCallback(async () => {
@@ -171,10 +209,6 @@ export default function RoomPage({ params }: RoomPageProps) {
 
   return (
     <div className="page-room">
-      <div className="bg-orbs" style={{ opacity: 0.3 }}>
-        <div className="bg-orb orb-1" />
-      </div>
-
       <ToastContainer />
 
       {/* Socket error overlay */}
@@ -207,6 +241,7 @@ export default function RoomPage({ params }: RoomPageProps) {
           <div className="room-code-badge">
             <span style={{ fontFamily: 'monospace', letterSpacing: 2 }}>{roomCode}</span>
             <button className="copy-btn" onClick={handleCopyCode} title="Copy code">📋</button>
+            <button className="copy-btn" onClick={handleShareLink} title="Share invite link">🔗</button>
           </div>
           <div className="meeting-timer">{formatTime(elapsed)}</div>
           <div className="participants-badge">
