@@ -18,8 +18,18 @@ const QUALITY_CONFIG = {
   failed:   { color: 'var(--red)',        label: 'Lost', title: 'Connection lost' },
 };
 
+// How many bars to light up for each quality level
+const LIT_BARS: Record<ConnectionQuality, number> = {
+  good: 3,
+  degraded: 2,
+  poor: 1,
+  unknown: 0,
+  failed: 0,
+};
+
 export function ConnectionQualityBadge({ quality, rtt }: Props) {
   const cfg = QUALITY_CONFIG[quality];
+  const litCount = LIT_BARS[quality];
 
   return (
     <div
@@ -31,27 +41,18 @@ export function ConnectionQualityBadge({ quality, rtt }: Props) {
       }}
     >
       {/* Three bars like a signal indicator */}
-      {(['good', 'degraded', 'poor'] as const).map((level, i) => {
-        const heights = [8, 12, 16];
-        const isLit =
-          quality === 'good' ||
-          (quality === 'degraded' && i < 2) ||
-          (quality === 'poor' && i < 1);
-        const showColor = isLit && quality !== 'unknown' && quality !== 'failed';
-
-        return (
-          <div
-            key={level}
-            style={{
-              width: 3,
-              height: heights[i],
-              borderRadius: 1,
-              background: showColor ? cfg.color : 'var(--border2)',
-              transition: 'background 0.5s',
-            }}
-          />
-        );
-      })}
+      {[8, 12, 16].map((height, i) => (
+        <div
+          key={i}
+          style={{
+            width: 3,
+            height,
+            borderRadius: 1,
+            background: i < litCount ? cfg.color : 'var(--border2)',
+            transition: 'background 0.5s',
+          }}
+        />
+      ))}
       <span style={{ fontFamily: 'var(--font-body)', fontWeight: 500 }}>
         {cfg.label}
       </span>
