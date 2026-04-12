@@ -3,7 +3,7 @@
 // Also supports join links: /join?room=XX0-ABCD
 
 'use client';
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -19,6 +19,14 @@ import { generateRoomCode, isValidRoomCode } from '@/lib/utils';
 type Tab = 'create' | 'join';
 
 export default function JoinPage() {
+  return (
+    <Suspense fallback={<div style={{ minHeight: '100vh', background: 'var(--bg)' }} />}>
+      <JoinPageContent />
+    </Suspense>
+  );
+}
+
+function JoinPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { setStudent, firebaseUser } = useAuthStore();
