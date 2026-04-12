@@ -31,12 +31,13 @@ export function ConnectionQualityBadge({ quality, rtt }: Props) {
       }}
     >
       {/* Three bars like a signal indicator */}
-      {['good', 'degraded', 'poor'].map((level, i) => {
+      {(['good', 'degraded', 'poor'] as const).map((level, i) => {
         const heights = [8, 12, 16];
         const isLit =
           quality === 'good' ||
           (quality === 'degraded' && i < 2) ||
           (quality === 'poor' && i < 1);
+        const showColor = isLit && quality !== 'unknown' && quality !== 'failed';
 
         return (
           <div
@@ -45,9 +46,7 @@ export function ConnectionQualityBadge({ quality, rtt }: Props) {
               width: 3,
               height: heights[i],
               borderRadius: 1,
-              background: isLit && quality !== 'unknown' && quality !== 'failed'
-                ? cfg.color
-                : 'var(--border2)',
+              background: showColor ? cfg.color : 'var(--border2)',
               transition: 'background 0.5s',
             }}
           />
