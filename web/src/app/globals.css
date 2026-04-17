@@ -519,6 +519,28 @@ button { font-family: var(--font-body); }
   margin-bottom: 8px;
 }
 .join-header p { color: var(--text-muted); font-size: 15px; }
+/* ── Auth mode toggle (Login / Register) ──────────────────────────────── */
+.auth-mode-toggle {
+  display: flex; gap: 8px;
+  margin-bottom: 16px;
+}
+.auth-mode-btn {
+  flex: 1; padding: 10px 16px; border-radius: var(--radius-sm);
+  font-size: 14px; font-weight: 600; cursor: pointer;
+  transition: all var(--transition);
+  border: 1.5px solid var(--border);
+  background: var(--surface2); color: var(--text-muted);
+}
+.auth-mode-btn.active {
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  color: #fff; border-color: transparent;
+  box-shadow: 0 4px 16px rgba(139,92,246,0.35);
+}
+.auth-mode-btn:hover:not(.active) {
+  border-color: var(--accent); color: var(--text);
+}
+
+/* ── Room tabs ──────────────────────────────────────────────────────────── */
 .tabs {
   display: flex; gap: 4px;
   background: var(--surface2); border-radius: var(--radius-sm);
