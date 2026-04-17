@@ -2,6 +2,7 @@
 // Renders the grid of all participant video tiles.
 // When screen sharing is active, the screen takes the main view and
 // camera tiles become small overlays.
+// When isHost === true, each remote tile has mute / camera-off controls.
 
 'use client';
 import { useRoomStore, type RemotePeer } from '@/store/useRoomStore';
@@ -13,30 +14,36 @@ interface VideoGridProps {
   localMuted: boolean;
   localCameraOff: boolean;
   screenStream: MediaStream | null;
+  isHost?: boolean;
+  onHostControl?: (targetSocketId: string, action: string) => void;
+  onHostControlAll?: (action: string) => void;
 }
 
 export function VideoGrid({
   localStream, localName, localMuted, localCameraOff, screenStream,
+  isHost = false, onHostControl, onHostControlAll,
 }: VideoGridProps) {
   const peers = useRoomStore(s => s.peers);
   const peerList = [...peers.values()] as RemotePeer[];
 
   const isScreenSharing = !!screenStream;
-
-  // Total tile count (without screen share tile)
   const participantCount = 1 + peerList.length;
 
+  const makeControls = (peer: RemotePeer) =>
+    isHost && onHostControl
+      ? {
+          onMute:      () => onHostControl(peer.socketId, peer.isMuted      ? 'unmute'     : 'mute'),
+          onCameraOff: () => onHostControl(peer.socketId, peer.isCameraOff  ? 'camera-on'  : 'camera-off'),
+          onStopShare: () => onHostControl(peer.socketId, 'stop-screenshare'),
+        }
+      : {};
+
   if (isScreenSharing) {
-    // Screen share layout: screen is main, participants are small thumbnails
     return (
       <div className="video-grid screen-active">
         {/* Main screen share area */}
         <div className="screen-main">
-          <VideoCard
-            name="Screen Share"
-            stream={screenStream}
-            isScreen={true}
-          />
+          <VideoCard name="Screen Share" stream={screenStream} isScreen={true} />
         </div>
 
         {/* Participant thumbnails sidebar */}
@@ -55,14 +62,29 @@ export function VideoGrid({
               stream={peer.stream}
               isMuted={peer.isMuted}
               isCameraOff={peer.isCameraOff}
+              isHost={isHost}
+              {...makeControls(peer)}
             />
           ))}
         </div>
+
+        {/* Host: mute-all banner when screen sharing */}
+        {isHost && peerList.length > 0 && onHostControlAll && (
+          <div className="host-global-bar">
+            <span className="host-badge">👑 Host</span>
+            <button className="host-global-btn" onClick={() => onHostControlAll('mute')}>
+              🔇 Mute All
+            </button>
+            <button className="host-global-btn" onClick={() => onHostControlAll('camera-off')}>
+              📵 Camera Off All
+            </button>
+          </div>
+        )}
       </div>
     );
   }
 
-  // Normal layout: standard grid
+  // Normal grid layout
   return (
     <div className="video-grid" data-count={Math.min(participantCount, 6)}>
       <VideoCard
@@ -79,8 +101,26 @@ export function VideoGrid({
           stream={peer.stream}
           isMuted={peer.isMuted}
           isCameraOff={peer.isCameraOff}
+          isHost={isHost}
+          {...makeControls(peer)}
         />
       ))}
+
+      {/* Host: global controls bar (shown when there are other participants) */}
+      {isHost && peerList.length > 0 && onHostControlAll && (
+        <div className="host-global-bar">
+          <span className="host-badge">👑 Host</span>
+          <button className="host-global-btn" onClick={() => onHostControlAll('mute')}>
+            🔇 Mute All
+          </button>
+          <button className="host-global-btn" onClick={() => onHostControlAll('camera-off')}>
+            📵 Camera Off All
+          </button>
+          <button className="host-global-btn" onClick={() => onHostControlAll('stop-screenshare')}>
+            ⏹️ Stop All Shares
+          </button>
+        </div>
+      )}
     </div>
   );
 }

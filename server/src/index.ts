@@ -198,6 +198,42 @@ io.on('connection', (socket) => {
     });
   }));
 
+  // ── HOST CONTROLS ───────────────────────────────────────────────────────────
+  // Only the room host (uid matching room.hostUid) can send these.
+
+  // Target one specific participant
+  socket.on('host-control', withRateLimit(socket.id, 'host-control', ({
+    targetSocketId, action,
+  }: { targetSocketId: string; action: string }) => {
+    const roomCode = roomStore.getRoomForSocket(socket.id);
+    if (!roomCode) return;
+
+    // Verify sender is host
+    if (roomStore.getHostUid(roomCode) !== uid) {
+      socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can control participants' });
+      return;
+    }
+
+    // Target must be in the same room
+    if (roomStore.getRoomForSocket(targetSocketId) !== roomCode) return;
+
+    socket.to(targetSocketId).emit('host-control', { action });
+    logger.info({ socketId: socket.id, targetSocketId, action }, 'Host control relayed');
+  }));
+
+  // Broadcast to all participants in the room (except host)
+  socket.on('host-control-all', withRateLimit(socket.id, 'host-control-all', ({
+    action,
+  }: { action: string }) => {
+    const roomCode = roomStore.getRoomForSocket(socket.id);
+    if (!roomCode) return;
+
+    if (roomStore.getHostUid(roomCode) !== uid) return;
+
+    socket.to(roomCode).emit('host-control', { action });
+    logger.info({ socketId: socket.id, roomCode, action }, 'Host control broadcast to all');
+  }));
+
   // ── DISCONNECT ──────────────────────────────────────────────────────────────
   socket.on('disconnect', (reason) => {
     const result = roomStore.removePeer(socket.id);

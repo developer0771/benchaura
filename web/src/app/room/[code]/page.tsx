@@ -192,6 +192,54 @@ export default function RoomPage({ params }: RoomPageProps) {
     }
   }, [isSharingScreen, setSharing, replaceTrackOnPeers, stopScreenShare]);
 
+  // ── Stable refs for media state (avoid stale closures in socket listener) ──
+  const isMutedRef      = useRef(isMuted);
+  const isCameraOffRef  = useRef(isCameraOff);
+  const isSharingRef    = useRef(isSharingScreen);
+  useEffect(() => { isMutedRef.current     = isMuted;         }, [isMuted]);
+  useEffect(() => { isCameraOffRef.current = isCameraOff;     }, [isCameraOff]);
+  useEffect(() => { isSharingRef.current   = isSharingScreen; }, [isSharingScreen]);
+
+  // ── Incoming host-control commands ────────────────────────────────────────
+  useEffect(() => {
+    if (!socket) return;
+
+    const handle = ({ action }: { action: string }) => {
+      switch (action) {
+        case 'mute':
+          if (!isMutedRef.current) { toggleMute(); toast('🔇 Host muted your microphone'); }
+          break;
+        case 'unmute':
+          if (isMutedRef.current) { toggleMute(); toast('🎤 Host unmuted your microphone'); }
+          break;
+        case 'camera-off':
+          if (!isCameraOffRef.current) { toggleCamera(); toast('📵 Host turned off your camera'); }
+          break;
+        case 'camera-on':
+          if (isCameraOffRef.current) { toggleCamera(); toast('📷 Host turned on your camera'); }
+          break;
+        case 'stop-screenshare':
+          if (isSharingRef.current) { stopScreenShare(); toast('⏹️ Host stopped your screen share'); }
+          break;
+      }
+    };
+
+    socket.on('host-control', handle);
+    return () => { socket.off('host-control', handle); };
+  }, [socket, toggleMute, toggleCamera, stopScreenShare]);
+
+  // ── Host sends a control command to a specific participant ────────────────
+  const sendHostControl = useCallback((targetSocketId: string, action: string) => {
+    socket?.emit('host-control', { targetSocketId, action });
+    toast(`✅ Control sent`);
+  }, [socket]);
+
+  // ── Host broadcasts a control to everyone in the room ─────────────────────
+  const sendHostControlAll = useCallback((action: string) => {
+    socket?.emit('host-control-all', { action });
+    toast('📢 Command sent to all participants');
+  }, [socket]);
+
   // ── Leave room ────────────────────────────────────────────────────────────
   const handleLeave = useCallback(async () => {
     if (!student) return;
@@ -277,6 +325,9 @@ export default function RoomPage({ params }: RoomPageProps) {
                 localMuted={isMuted}
                 localCameraOff={isCameraOff}
                 screenStream={screenStream}
+                isHost={student.isHost}
+                onHostControl={sendHostControl}
+                onHostControlAll={sendHostControlAll}
               />
             ) : null}
           </ErrorBoundary>

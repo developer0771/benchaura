@@ -159,6 +159,18 @@ class RoomStore {
   isRoomFull(roomCode: string, maxPeers = 8): boolean {
     return (this.rooms.get(roomCode)?.peers.size ?? 0) >= maxPeers;
   }
+
+  // ── Host lookup ──────────────────────────────────────────────────────────
+  getHostUid(roomCode: string): string | undefined {
+    return this.rooms.get(roomCode)?.hostUid;
+  }
+
+  // ── Get a single peer by socketId ─────────────────────────────────────────
+  getPeer(socketId: string): Peer | undefined {
+    const roomCode = this.socketToRoom.get(socketId);
+    if (!roomCode) return undefined;
+    return this.rooms.get(roomCode)?.peers.get(socketId);
+  }
 }
 
 export const roomStore = new RoomStore();
