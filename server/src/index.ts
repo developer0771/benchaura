@@ -131,8 +131,9 @@ io.on('connection', (socket) => {
     // Get existing peers BEFORE adding this one
     const existingPeers = roomStore.getPeersExcept(roomCode, socket.id);
 
-    // Register peer
-    roomStore.ensureRoom(roomCode, uid);
+    // Register peer — use authoritative hostUid from Firestore (falls back to
+    // joining uid only if Firestore lookup failed, which is rare).
+    roomStore.ensureRoom(roomCode, validation.hostUid ?? uid);
     roomStore.addPeer(roomCode, {
       socketId: socket.id,
       uid,

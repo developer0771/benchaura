@@ -55,7 +55,9 @@ class RoomStore {
   }
 
   // ── Validate room exists in Firestore before joining ────────────────────
-  async validateRoom(roomCode: string): Promise<{ valid: boolean; reason?: string }> {
+  // Returns hostUid so the server can authoritatively identify the room host
+  // even after a server restart (in-memory state is lost).
+  async validateRoom(roomCode: string): Promise<{ valid: boolean; reason?: string; hostUid?: string }> {
     const db = getFirestore();
     if (!db) return { valid: true }; // skip validation if no DB
 
@@ -64,7 +66,7 @@ class RoomStore {
       if (!snap.exists) return { valid: false, reason: 'Room not found' };
       const data = snap.data()!;
       if (!data.isActive) return { valid: false, reason: 'Room has ended' };
-      return { valid: true };
+      return { valid: true, hostUid: data.hostUid };
     } catch (err) {
       logger.error({ err, roomCode }, 'Firestore validation failed — allowing join');
       return { valid: true }; // fail open (don't block users on DB error)
