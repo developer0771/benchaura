@@ -13,6 +13,26 @@ export interface RemotePeer {
   isCameraOff: boolean;
 }
 
+// A reaction floats up from a tile and auto-expires after ~4s.
+export interface Reaction {
+  id: string;
+  socketId: string;  // who sent it
+  name: string;
+  emoji: string;
+  at: number;        // timestamp for cleanup
+}
+
+// Pomodoro timer state — mirrored from Firestore so all clients stay in sync.
+export type TimerPhase  = 'idle' | 'focus' | 'break';
+export type TimerAction = 'start' | 'pause' | 'reset';
+export interface TimerState {
+  phase:     TimerPhase;
+  action:    TimerAction;
+  duration:  number;    // seconds of current phase
+  startedAt: number;    // ms since epoch when the run started (or paused-at snapshot)
+  remaining: number;    // seconds remaining when paused
+}
+
 interface RoomState {
   // Room metadata
   roomCode: string;
@@ -30,6 +50,16 @@ interface RoomState {
   chatOpen: boolean;
   unreadCount: number;
 
+  // Raise hand — socketId → { name, at }
+  raisedHands: Map<string, { name: string; at: number }>;
+  localHandRaised: boolean;
+
+  // Floating emoji reactions (transient)
+  reactions: Reaction[];
+
+  // Shared Pomodoro timer
+  timer: TimerState;
+
   // Actions
   setRoomCode: (code: string) => void;
   toggleMute: () => void;
@@ -43,8 +73,25 @@ interface RoomState {
   openChat: () => void;
   incrementUnread: () => void;
   clearUnread: () => void;
+
+  setLocalHandRaised: (raised: boolean) => void;
+  setPeerHand: (socketId: string, name: string, raised: boolean) => void;
+
+  pushReaction: (r: Reaction) => void;
+  expireReaction: (id: string) => void;
+
+  setTimer: (t: TimerState) => void;
+
   reset: () => void;
 }
+
+const idleTimer: TimerState = {
+  phase: 'idle',
+  action: 'reset',
+  duration: 25 * 60,
+  startedAt: 0,
+  remaining: 25 * 60,
+};
 
 const initialState = {
   roomCode: '',
@@ -55,9 +102,13 @@ const initialState = {
   peers: new Map<string, RemotePeer>(),
   chatOpen: false,
   unreadCount: 0,
+  raisedHands: new Map<string, { name: string; at: number }>(),
+  localHandRaised: false,
+  reactions: [] as Reaction[],
+  timer: idleTimer,
 };
 
-export const useRoomStore = create<RoomState>()((set, get) => ({
+export const useRoomStore = create<RoomState>()((set) => ({
   ...initialState,
 
   setRoomCode: (roomCode) => set({ roomCode }),
@@ -79,7 +130,10 @@ export const useRoomStore = create<RoomState>()((set, get) => ({
     set((s) => {
       const peers = new Map(s.peers);
       peers.delete(socketId);
-      return { peers };
+      // Also drop any raised hand for this peer
+      const raisedHands = new Map(s.raisedHands);
+      raisedHands.delete(socketId);
+      return { peers, raisedHands };
     }),
 
   updatePeerStream: (socketId, stream) =>
@@ -113,5 +167,31 @@ export const useRoomStore = create<RoomState>()((set, get) => ({
 
   clearUnread: () => set({ unreadCount: 0 }),
 
-  reset: () => set({ ...initialState, peers: new Map(), startTime: Date.now() }),
+  setLocalHandRaised: (localHandRaised) => set({ localHandRaised }),
+
+  setPeerHand: (socketId, name, raised) =>
+    set((s) => {
+      const raisedHands = new Map(s.raisedHands);
+      if (raised) raisedHands.set(socketId, { name, at: Date.now() });
+      else raisedHands.delete(socketId);
+      return { raisedHands };
+    }),
+
+  pushReaction: (r) =>
+    set((s) => ({ reactions: [...s.reactions.slice(-9), r] })),
+
+  expireReaction: (id) =>
+    set((s) => ({ reactions: s.reactions.filter(r => r.id !== id) })),
+
+  setTimer: (timer) => set({ timer }),
+
+  reset: () =>
+    set({
+      ...initialState,
+      peers: new Map(),
+      raisedHands: new Map(),
+      reactions: [],
+      timer: idleTimer,
+      startTime: Date.now(),
+    }),
 }));

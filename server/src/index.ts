@@ -235,6 +235,96 @@ io.on('connection', (socket) => {
     logger.info({ socketId: socket.id, roomCode, action }, 'Host control broadcast to all');
   }));
 
+  // ── REACTIONS ───────────────────────────────────────────────────────────────
+  // Any participant can send a brief emoji reaction that floats up on everyone's
+  // screen. Not persisted. Server just validates and broadcasts.
+  socket.on('room:reaction', withRateLimit(socket.id, 'room:reaction', ({
+    emoji,
+  }: { emoji: string }) => {
+    const roomCode = roomStore.getRoomForSocket(socket.id);
+    if (!roomCode) return;
+    if (typeof emoji !== 'string' || emoji.length === 0 || emoji.length > 16) return;
+
+    const peer = roomStore.getPeer(socket.id);
+    if (!peer) return;
+
+    io.to(roomCode).emit('room:reaction', {
+      id: `${socket.id}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      socketId: socket.id,
+      name: peer.name,
+      emoji,
+    });
+  }));
+
+  // ── RAISE HAND ──────────────────────────────────────────────────────────────
+  // Any participant can toggle their hand raised / lowered. Broadcast to the
+  // room so everyone (especially the host) sees who has raised their hand.
+  socket.on('room:raise-hand', withRateLimit(socket.id, 'room:raise-hand', ({
+    raised,
+  }: { raised: boolean }) => {
+    const roomCode = roomStore.getRoomForSocket(socket.id);
+    if (!roomCode) return;
+
+    const peer = roomStore.getPeer(socket.id);
+    if (!peer) return;
+
+    io.to(roomCode).emit('room:raise-hand', {
+      socketId: socket.id,
+      name: peer.name,
+      raised: Boolean(raised),
+    });
+  }));
+
+  // ── POMODORO TIMER ──────────────────────────────────────────────────────────
+  // Host-controlled shared countdown visible to all participants in the room.
+  // Server doesn't persist — clients that join late receive current state
+  // via a replay on join (see below).
+  //
+  // A timer message looks like:
+  //   { phase: 'focus' | 'break' | 'idle', startedAt: ms, duration: seconds,
+  //     action: 'start' | 'pause' | 'reset' | 'tick' }
+  //
+  // We keep the latest per-room state in memory so late joiners can sync.
+  const roomTimers = (globalThis as unknown as { __roomTimers?: Map<string, unknown> }).__roomTimers
+    ?? new Map<string, unknown>();
+  (globalThis as unknown as { __roomTimers: Map<string, unknown> }).__roomTimers = roomTimers;
+
+  socket.on('room:timer', withRateLimit(socket.id, 'room:timer', (payload: {
+    phase: 'focus' | 'break' | 'idle';
+    action: 'start' | 'pause' | 'reset';
+    duration: number;       // seconds
+    startedAt: number;      // ms since epoch when the current run started
+    remaining?: number;     // seconds remaining when paused
+  }) => {
+    const roomCode = roomStore.getRoomForSocket(socket.id);
+    if (!roomCode) return;
+
+    // Only host can drive the timer
+    if (roomStore.getHostUid(roomCode) !== uid) {
+      socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can control the timer' });
+      return;
+    }
+
+    // Light validation
+    if (typeof payload.duration !== 'number' || payload.duration < 0 || payload.duration > 7200) return;
+    if (!['focus', 'break', 'idle'].includes(payload.phase)) return;
+    if (!['start', 'pause', 'reset'].includes(payload.action)) return;
+
+    roomTimers.set(roomCode, payload);
+    io.to(roomCode).emit('room:timer', payload);
+    logger.info({ roomCode, action: payload.action, phase: payload.phase }, 'Timer update');
+  }));
+
+  // When a peer joins, send the current timer state (if any) just to that peer.
+  // Hooked into the 'join-room' flow by emitting here after the fact.
+  // Simpler: reply when a client asks for it.
+  socket.on('room:timer-sync', () => {
+    const roomCode = roomStore.getRoomForSocket(socket.id);
+    if (!roomCode) return;
+    const state = roomTimers.get(roomCode);
+    if (state) socket.emit('room:timer', state);
+  });
+
   // ── DISCONNECT ──────────────────────────────────────────────────────────────
   socket.on('disconnect', (reason) => {
     const result = roomStore.removePeer(socket.id);

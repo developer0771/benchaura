@@ -22,6 +22,7 @@ import { useWebRTC } from '@/hooks/useWebRTC';
 import { useChat } from '@/hooks/useChat';
 import { useIceServers } from '@/hooks/useIceServers';
 import { useConnectionQuality } from '@/hooks/useConnectionQuality';
+import { useRoomSocial } from '@/hooks/useRoomSocial';
 import { leaveRoom } from '@/lib/firestore';
 import { formatTime } from '@/lib/utils';
 
@@ -32,8 +33,10 @@ import { PermissionsGate } from '@/components/room/PermissionsGate';
 import { RoomSkeleton } from '@/components/room/RoomSkeleton';
 import { RoomError } from '@/components/room/RoomError';
 import { ConnectionQualityBadge } from '@/components/room/ConnectionQuality';
+import { Pomodoro } from '@/components/room/Pomodoro';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { ToastContainer, toast } from '@/components/ui/Toast';
+import { Icon } from '@/components/ui/Icon';
 
 interface RoomPageProps {
   params: { code: string };
@@ -106,6 +109,9 @@ export default function RoomPage({ params }: RoomPageProps) {
     uid:  student?.uid  ?? '',
     name: student?.name ?? 'Unknown',
   });
+
+  // ── Reactions, raise hand, pomodoro timer (socket-driven) ────────────────
+  const { sendReaction, toggleHand, setTimerState } = useRoomSocial({ socket });
 
   // ── Peer count ────────────────────────────────────────────────────────────
   const peers     = useRoomStore(s => s.peers);
@@ -287,20 +293,28 @@ export default function RoomPage({ params }: RoomPageProps) {
         </div>
         <div className="room-meta">
           <div className="room-code-badge">
-            <span style={{ fontFamily: 'monospace', letterSpacing: 2 }}>{roomCode}</span>
-            <button className="copy-btn" onClick={handleCopyCode} title="Copy code">📋</button>
-            <button className="copy-btn" onClick={handleShareLink} title="Share invite link">🔗</button>
+            <span>{roomCode}</span>
+            <button className="copy-btn" onClick={handleCopyCode} title="Copy room code" aria-label="Copy code">
+              <Icon name="copy" size={14} />
+            </button>
+            <button className="copy-btn" onClick={handleShareLink} title="Share invite link" aria-label="Share">
+              <Icon name="share" size={14} />
+            </button>
           </div>
           <div className="meeting-timer">{formatTime(elapsed)}</div>
           <div className="participants-badge">
-            <span>👥</span>
+            <Icon name="users" size={14} />
             <span>{peerCount}</span>
           </div>
-          {/* v2: connection quality badge */}
           <ConnectionQualityBadge quality={quality} rtt={rtt} />
         </div>
         <Link href="/profile" className="btn btn-sm btn-ghost">Profile</Link>
       </header>
+
+      {/* Pomodoro study timer — shared across the room */}
+      <div className="pomodoro-dock">
+        <Pomodoro isHost={student.isHost} onChange={setTimerState} />
+      </div>
 
       {/* Main layout */}
       <div className="room-layout">
@@ -349,6 +363,8 @@ export default function RoomPage({ params }: RoomPageProps) {
         onToggleCamera={handleToggleCamera}
         onToggleScreen={handleToggleScreen}
         onLeave={handleLeave}
+        onToggleHand={toggleHand}
+        onReaction={sendReaction}
       />
     </div>
   );
