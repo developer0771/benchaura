@@ -7,6 +7,7 @@
 'use client';
 import { useRoomStore, type RemotePeer } from '@/store/useRoomStore';
 import { VideoCard } from './VideoCard';
+import { Icon } from '@/components/ui/Icon';
 
 interface VideoGridProps {
   localStream: MediaStream | null;
@@ -58,6 +59,7 @@ export function VideoGrid({
           {peerList.map(peer => (
             <VideoCard
               key={peer.socketId}
+              socketId={peer.socketId}
               name={peer.name}
               stream={peer.stream}
               isMuted={peer.isMuted}
@@ -71,12 +73,12 @@ export function VideoGrid({
         {/* Host: mute-all banner when screen sharing */}
         {isHost && peerList.length > 0 && onHostControlAll && (
           <div className="host-global-bar">
-            <span className="host-badge">👑 Host</span>
+            <span className="host-badge"><Icon name="crown" size={13} filled /> Host</span>
             <button className="host-global-btn" onClick={() => onHostControlAll('mute')}>
-              🔇 Mute All
+              <Icon name="micOff" size={13} /> Mute all
             </button>
             <button className="host-global-btn" onClick={() => onHostControlAll('camera-off')}>
-              📵 Camera Off All
+              <Icon name="videoOff" size={13} /> Cameras off
             </button>
           </div>
         )}
@@ -109,15 +111,15 @@ export function VideoGrid({
       {/* Host: global controls bar (shown when there are other participants) */}
       {isHost && peerList.length > 0 && onHostControlAll && (
         <div className="host-global-bar">
-          <span className="host-badge">👑 Host</span>
+          <span className="host-badge"><Icon name="crown" size={13} filled /> Host</span>
           <button className="host-global-btn" onClick={() => onHostControlAll('mute')}>
-            🔇 Mute All
+            <Icon name="micOff" size={13} /> Mute all
           </button>
           <button className="host-global-btn" onClick={() => onHostControlAll('camera-off')}>
-            📵 Camera Off All
+            <Icon name="videoOff" size={13} /> Cameras off
           </button>
           <button className="host-global-btn" onClick={() => onHostControlAll('stop-screenshare')}>
-            ⏹️ Stop All Shares
+            <Icon name="screenStop" size={13} /> Stop shares
           </button>
         </div>
       )}

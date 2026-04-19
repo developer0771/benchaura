@@ -1,13 +1,18 @@
 // ─── components/room/VideoCard.tsx ──────────────────────────────────────────
 // Single participant tile in the video grid.
 // Renders either a live <video> element or an avatar fallback.
-// When isHost===true and callbacks are provided, shows host control overlay.
+// Overlays: host controls (when viewer is host), raised-hand indicator,
+// floating reactions.
 
 'use client';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { getInitials } from '@/lib/utils';
+import { Icon } from '@/components/ui/Icon';
+import { useRoomStore } from '@/store/useRoomStore';
 
 interface VideoCardProps {
+  /** socketId is used to match raised hands and reactions. Omit for local & screen. */
+  socketId?: string;
   name: string;
   stream: MediaStream | null;
   isLocal?: boolean;
@@ -22,12 +27,29 @@ interface VideoCardProps {
 }
 
 export function VideoCard({
-  name, stream,
+  socketId, name, stream,
   isLocal = false, isScreen = false,
   isMuted = false, isCameraOff = false,
   isHost = false, onMute, onCameraOff, onStopShare,
 }: VideoCardProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Store state — which hand is raised, active reactions for this tile
+  const raisedHands    = useRoomStore(s => s.raisedHands);
+  const reactions      = useRoomStore(s => s.reactions);
+  const localHandRaised = useRoomStore(s => s.localHandRaised);
+
+  // Match the identifier for reactions / hand overlay.
+  // Local tile has no socketId, so we use a sentinel "__self__".
+  const matchId = isLocal ? '__self__' : socketId;
+  const handRaised = isLocal
+    ? localHandRaised
+    : (socketId ? raisedHands.has(socketId) : false);
+
+  const myReactions = useMemo(
+    () => reactions.filter(r => (isLocal ? false : r.socketId === matchId)),
+    [reactions, isLocal, matchId]
+  );
 
   // Attach the stream to the video element whenever it changes
   useEffect(() => {
@@ -58,6 +80,7 @@ export function VideoCard({
     isScreen       ? 'screen-card'  : '',
     !hasVideo      ? 'no-video'     : '',
     showHostControls ? 'host-managed' : '',
+    handRaised     ? 'hand-raised'  : '',
   ].filter(Boolean).join(' ');
 
   return (
@@ -74,13 +97,29 @@ export function VideoCard({
       )}
 
       <div className="video-name">
-        {isScreen ? '🖥️ Screen Share' : name}
-        {isLocal && !isScreen && ' (You)'}
+        {isScreen && <Icon name="screen" size={12} />}
+        {isScreen ? <span style={{ marginLeft: 4 }}>Screen share</span> : name}
       </div>
 
       {!isScreen && (
-        <div className={`mic-indicator${isMuted ? ' muted' : ''}`}>
-          {isMuted ? '🔇' : '🎤'}
+        <div className={`mic-indicator${isMuted ? ' muted' : ''}`} title={isMuted ? 'Muted' : 'Mic on'}>
+          <Icon name={isMuted ? 'micOff' : 'mic'} size={14} />
+        </div>
+      )}
+
+      {/* ── Raised hand badge ──────────────────────────────────────────── */}
+      {handRaised && !isScreen && (
+        <div className="hand-badge" title={`${isLocal ? 'You' : name} raised a hand`}>
+          <span className="hand-badge-emoji">✋</span>
+        </div>
+      )}
+
+      {/* ── Floating reactions ─────────────────────────────────────────── */}
+      {!isScreen && myReactions.length > 0 && (
+        <div className="reaction-layer" aria-live="polite">
+          {myReactions.map(r => (
+            <span key={r.id} className="reaction-float">{r.emoji}</span>
+          ))}
         </div>
       )}
 
@@ -92,8 +131,9 @@ export function VideoCard({
               className={`hc-btn${isMuted ? ' hc-active' : ''}`}
               onClick={onMute}
               title={isMuted ? 'Unmute participant' : 'Mute participant'}
+              aria-label={isMuted ? 'Unmute participant' : 'Mute participant'}
             >
-              {isMuted ? '🎤' : '🔇'}
+              <Icon name={isMuted ? 'mic' : 'micOff'} size={14} />
             </button>
           )}
           {onCameraOff && (
@@ -101,8 +141,9 @@ export function VideoCard({
               className={`hc-btn${isCameraOff ? ' hc-active' : ''}`}
               onClick={onCameraOff}
               title={isCameraOff ? 'Turn camera on' : 'Turn camera off'}
+              aria-label={isCameraOff ? 'Turn camera on' : 'Turn camera off'}
             >
-              {isCameraOff ? '📷' : '📵'}
+              <Icon name={isCameraOff ? 'video' : 'videoOff'} size={14} />
             </button>
           )}
           {onStopShare && (
@@ -110,8 +151,9 @@ export function VideoCard({
               className="hc-btn hc-danger"
               onClick={onStopShare}
               title="Stop screen share"
+              aria-label="Stop screen share"
             >
-              ⏹️
+              <Icon name="screenStop" size={14} />
             </button>
           )}
         </div>
