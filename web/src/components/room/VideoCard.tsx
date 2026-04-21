@@ -1,24 +1,42 @@
 // ─── components/room/VideoCard.tsx ──────────────────────────────────────────
 // Single participant tile in the video grid.
-// Renders either a live <video> element or an avatar fallback.
+//
+// MEDIA MODEL (LiveKit):
+//   The tile binds LiveKit Track objects directly to the <video> / <audio>
+//   elements via track.attach(el). This replaces the old MediaStream /
+//   srcObject wiring — LiveKit tracks know how to handle simulcast layer
+//   switching and adaptive quality under the hood.
+//
 // Overlays: host controls (when viewer is host), raised-hand indicator,
-// floating reactions.
+// floating reactions, speaking glow.
 
 'use client';
 import { useEffect, useMemo, useRef } from 'react';
+import type {
+  LocalVideoTrack, LocalAudioTrack,
+  RemoteVideoTrack, RemoteAudioTrack,
+} from 'livekit-client';
 import { getInitials } from '@/lib/utils';
 import { Icon } from '@/components/ui/Icon';
 import { useRoomStore } from '@/store/useRoomStore';
 
+type AnyVideoTrack = LocalVideoTrack | RemoteVideoTrack | null | undefined;
+type AnyAudioTrack = LocalAudioTrack | RemoteAudioTrack | null | undefined;
+
 interface VideoCardProps {
-  /** socketId is used to match raised hands and reactions. Omit for local & screen. */
+  /** socketId doubles as the LiveKit participant identity. Used to match
+   *  raised hands and reactions. Omit for local + screen tiles. */
   socketId?: string;
   name: string;
-  stream: MediaStream | null;
+  videoTrack?: AnyVideoTrack;
+  /** Remote audio track — rendered through a hidden <audio>. Omit for local
+   *  (we don't want to hear ourselves) and for pure screen-share tiles. */
+  audioTrack?: AnyAudioTrack;
   isLocal?: boolean;
   isScreen?: boolean;
   isMuted?: boolean;
   isCameraOff?: boolean;
+  isSpeaking?: boolean;
   // Host-control callbacks (only provided when the viewer is the room host)
   isHost?: boolean;
   onMute?: () => void;
@@ -27,12 +45,14 @@ interface VideoCardProps {
 }
 
 export function VideoCard({
-  socketId, name, stream,
+  socketId, name,
+  videoTrack, audioTrack,
   isLocal = false, isScreen = false,
-  isMuted = false, isCameraOff = false,
+  isMuted = false, isCameraOff = false, isSpeaking = false,
   isHost = false, onMute, onCameraOff, onStopShare,
 }: VideoCardProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   // Store state — which hand is raised, active reactions for this tile
   const raisedHands    = useRoomStore(s => s.raisedHands);
@@ -51,24 +71,30 @@ export function VideoCard({
     [reactions, isLocal, matchId]
   );
 
-  // Attach the stream to the video element whenever it changes
+  // ── Attach video track to <video> element ────────────────────────────────
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !stream) return;
-
-    if (video.srcObject !== stream) {
-      video.srcObject = stream;
-      video.play().catch(err => {
-        if (err.name !== 'AbortError') console.warn('[VideoCard] play() failed:', err);
-      });
-    }
-
+    const el = videoRef.current;
+    if (!el || !videoTrack) return;
+    videoTrack.attach(el);
+    // LiveKit mutes autoplay tracks that have been muted; this just ensures
+    // the element plays once attached.
+    el.play().catch(err => {
+      if (err?.name !== 'AbortError') console.warn('[VideoCard] play() failed:', err);
+    });
     return () => {
-      if (video.srcObject === stream) video.srcObject = null;
+      videoTrack.detach(el);
     };
-  }, [stream]);
+  }, [videoTrack]);
 
-  const hasVideo = stream && stream.getVideoTracks().length > 0 && !isCameraOff;
+  // ── Attach audio track (remote only) ─────────────────────────────────────
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el || !audioTrack || isLocal) return;
+    audioTrack.attach(el);
+    return () => { audioTrack.detach(el); };
+  }, [audioTrack, isLocal]);
+
+  const hasVideo = !!videoTrack && !isCameraOff;
   const initials = getInitials(name);
 
   // Show host controls if host and callbacks exist and it's not local/screen tile
@@ -81,6 +107,7 @@ export function VideoCard({
     !hasVideo      ? 'no-video'     : '',
     showHostControls ? 'host-managed' : '',
     handRaised     ? 'hand-raised'  : '',
+    isSpeaking     ? 'speaking'     : '',
   ].filter(Boolean).join(' ');
 
   return (
@@ -90,10 +117,16 @@ export function VideoCard({
           ref={videoRef}
           autoPlay
           playsInline
-          muted={isLocal} // Always mute local video to prevent echo
+          muted={isLocal} // Always mute local video element (audio routed separately)
         />
       ) : (
         <div className="avatar-placeholder">{initials}</div>
+      )}
+
+      {/* Remote audio is rendered through a hidden <audio> so it plays
+          independently of the <video> muted flag. No element for local. */}
+      {!isLocal && audioTrack && (
+        <audio ref={audioRef} autoPlay playsInline />
       )}
 
       <div className="video-name">
