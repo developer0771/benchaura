@@ -26,8 +26,14 @@ const ERROR_CONFIGS: Record<string, {
   ROOM_FULL: {
     icon: '👥',
     title: 'Room is full',
-    description: 'This room already has 8 participants, which is the maximum.',
+    description: 'This room has reached its participant limit (500). Ask the host to start a new room.',
     action: { label: 'Go back', href: '/' },
+  },
+  LIVEKIT_ERROR: {
+    icon: '📡',
+    title: 'Video service unavailable',
+    description: 'Could not connect to the LiveKit media server. The host may need to configure LiveKit credentials, or your network may be blocking the connection.',
+    action: { label: 'Retry', onClick: () => window.location.reload() },
   },
   INVALID_CODE: {
     icon: '❌',

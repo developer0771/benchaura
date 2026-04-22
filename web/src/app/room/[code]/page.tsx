@@ -1,13 +1,15 @@
-// web/src/app/room/[code]/page.tsx — v2
-// All v2 upgrades wired together:
-//   ✅ Dynamic TURN credentials via useIceServers
-//   ✅ Firebase token sent with socket (via useSocket v2)
-//   ✅ Connection quality monitoring
-//   ✅ Reconnection handling
-//   ✅ ErrorBoundary around video grid
-//   ✅ RoomSkeleton loading state
-//   ✅ RoomError overlay for socket errors
-//   ✅ Structured error handling for all room events
+// web/src/app/room/[code]/page.tsx — v3 (LiveKit SFU)
+//
+// WHAT CHANGED FROM v2:
+//   • Media no longer flows over a WebRTC mesh via our Socket.io server.
+//     Instead, useLiveKit connects to a LiveKit SFU, publishes camera + mic
+//     once, and subscribes to remote tracks. Socket.io stays for presence,
+//     chat, host controls, reactions, raise-hand, and the Pomodoro timer.
+//   • useMedia / useWebRTC / useIceServers / useConnectionQuality /
+//     useReconnection are retired — their responsibilities now live inside
+//     useLiveKit (+ native LiveKit reconnection).
+//   • VideoGrid receives LiveKit tracks instead of MediaStreams.
+//   • Screen share uses LiveKit's publishTrack(source=ScreenShare).
 
 'use client';
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -16,12 +18,10 @@ import Link from 'next/link';
 
 import { useAuthStore } from '@/store/useAuthStore';
 import { useRoomStore } from '@/store/useRoomStore';
-import { useMedia } from '@/hooks/useMedia';
 import { useSocket } from '@/hooks/useSocket';
-import { useWebRTC } from '@/hooks/useWebRTC';
+import { useLiveKit } from '@/hooks/useLiveKit';
 import { useChat } from '@/hooks/useChat';
-import { useIceServers } from '@/hooks/useIceServers';
-import { useConnectionQuality } from '@/hooks/useConnectionQuality';
+import { useRoomSocial } from '@/hooks/useRoomSocial';
 import { leaveRoom } from '@/lib/firestore';
 import { formatTime } from '@/lib/utils';
 
@@ -32,8 +32,10 @@ import { PermissionsGate } from '@/components/room/PermissionsGate';
 import { RoomSkeleton } from '@/components/room/RoomSkeleton';
 import { RoomError } from '@/components/room/RoomError';
 import { ConnectionQualityBadge } from '@/components/room/ConnectionQuality';
+import { Pomodoro } from '@/components/room/Pomodoro';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { ToastContainer, toast } from '@/components/ui/Toast';
+import { Icon } from '@/components/ui/Icon';
 
 interface RoomPageProps {
   params: { code: string };
@@ -57,48 +59,39 @@ export default function RoomPage({ params }: RoomPageProps) {
     return () => clearInterval(t);
   }, [startTime]);
 
-  // ── Screen share ──────────────────────────────────────────────────────────
-  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
-
-  // ── Local media ───────────────────────────────────────────────────────────
-  const {
-    localStream, permission,
-    isMuted, isCameraOff,
-    requestCamera, requestAudioOnly,
-    toggleMute, toggleCamera, stopAll,
-  } = useMedia();
-
-  // ── Dynamic TURN credentials ──────────────────────────────────────────────
-  const { iceServers, isLoading: iceLoading } = useIceServers();
-
-  // ── Socket (sends Firebase token in handshake) ────────────────────────────
+  // ── Socket (presence, chat, reactions, host controls) ────────────────────
   const { socket, isConnected, socketError, clearError } = useSocket();
 
-  // ── WebRTC (uses dynamic ICE servers, exposes peerConnections for quality) ─
-  const mediaReady = permission === 'granted' || permission === 'skipped';
-  const { broadcastMediaState, peerConnections } = useWebRTC({
-    socket,
-    localStream,
-    iceServers,               // ← Twilio TURN credentials
-    enabled: mediaReady && !iceLoading,
+  // ── LiveKit (media) ───────────────────────────────────────────────────────
+  // Note: localAudioTrack is intentionally unused in the grid — LiveKit
+  // publishes it to the SFU for us and we don't render it in the local
+  // tile (would cause echo).
+  const {
+    connectionQuality,
+    isConnected: lkConnected,
+    error: lkError,
+    localVideoTrack, localScreenTrack,
+    permission,
+    isMuted, isCameraOff, isSharingScreen,
+    requestCamera, requestAudioOnly,
+    toggleMute, toggleCamera,
+    startScreenShare, stopScreenShare,
+    disconnect: lkDisconnect,
+  } = useLiveKit({
+    roomCode,
+    displayName: student?.name ?? 'Guest',
+    isHost:      !!student?.isHost,
+    enabled:     !!student,
   });
 
-  // ── Connection quality monitor ─────────────────────────────────────────────
-  const { quality, rtt } = useConnectionQuality(peerConnections.current);
-
-  // ── Broadcast local media state changes ───────────────────────────────────
-  useEffect(() => {
-    broadcastMediaState(isMuted, isCameraOff);
-  }, [isMuted, isCameraOff, broadcastMediaState]);
-
-  // ── Join signaling room once everything is ready ──────────────────────────
+  // ── Join signaling room (for presence + chat/reactions/timer) ────────────
   const hasJoinedRef = useRef(false);
   useEffect(() => {
-    if (!socket || !isConnected || !student || !localStream || hasJoinedRef.current) return;
+    if (!socket || !isConnected || !student || hasJoinedRef.current) return;
     hasJoinedRef.current = true;
     socket.emit('join-room', { roomCode, name: student.name });
     toast(`🎉 Joined room ${roomCode}`);
-  }, [socket, isConnected, student, localStream, roomCode]);
+  }, [socket, isConnected, student, roomCode]);
 
   // ── Chat ──────────────────────────────────────────────────────────────────
   const { messages, send, isSending } = useChat({
@@ -107,7 +100,10 @@ export default function RoomPage({ params }: RoomPageProps) {
     name: student?.name ?? 'Unknown',
   });
 
-  // ── Peer count ────────────────────────────────────────────────────────────
+  // ── Reactions, raise hand, pomodoro (socket-driven) ──────────────────────
+  const { sendReaction, toggleHand, setTimerState } = useRoomSocial({ socket });
+
+  // ── Peer count (LiveKit-backed) ──────────────────────────────────────────
   const peers     = useRoomStore(s => s.peers);
   const peerCount = peers.size + 1;
 
@@ -132,67 +128,30 @@ export default function RoomPage({ params }: RoomPageProps) {
     }
   }
 
-  // ── Toggle mute ───────────────────────────────────────────────────────────
-  function handleToggleMute() {
-    toggleMute();
-    toast(isMuted ? '🎤 Microphone on' : '🔇 Microphone off');
-  }
+  // ── Toggle mute / camera (wrapped to add toasts) ──────────────────────────
+  const handleToggleMute = useCallback(async () => {
+    await toggleMute();
+    // Note: isMuted state is stale until next render, so invert here.
+    toast(!isMuted ? '🔇 Microphone off' : '🎤 Microphone on');
+  }, [toggleMute, isMuted]);
 
-  // ── Toggle camera ─────────────────────────────────────────────────────────
-  function handleToggleCamera() {
-    toggleCamera();
-    toast(isCameraOff ? '📷 Camera on' : '📵 Camera off');
-  }
+  const handleToggleCamera = useCallback(async () => {
+    await toggleCamera();
+    toast(!isCameraOff ? '📵 Camera off' : '📷 Camera on');
+  }, [toggleCamera, isCameraOff]);
 
-  // ── Screen share ──────────────────────────────────────────────────────────
-  const { setSharing, isSharingScreen } = useRoomStore();
-
-  // Replace video track on all peer connections with the given track
-  const replaceTrackOnPeers = useCallback((newTrack: MediaStreamTrack) => {
-    peerConnections.current.forEach((pc) => {
-      const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-      if (sender) {
-        sender.replaceTrack(newTrack).catch(console.error);
-      }
-    });
-  }, [peerConnections]);
-
-  const stopScreenShare = useCallback(() => {
-    screenStream?.getTracks().forEach(t => t.stop());
-    setScreenStream(null);
-    setSharing(false);
-    // Restore camera track on all peer connections
-    const cameraTrack = localStream?.getVideoTracks()[0];
-    if (cameraTrack) replaceTrackOnPeers(cameraTrack);
-    toast('⏹️ Screen sharing stopped');
-  }, [screenStream, setSharing, localStream, replaceTrackOnPeers]);
-
+  // ── Screen share ─────────────────────────────────────────────────────────
   const handleToggleScreen = useCallback(async () => {
     if (isSharingScreen) {
-      stopScreenShare();
-      return;
+      await stopScreenShare();
+      toast('⏹️ Screen sharing stopped');
+    } else {
+      await startScreenShare();
+      if (isSharingScreen) toast('🖥️ Screen sharing started');
     }
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      setScreenStream(stream);
-      setSharing(true);
+  }, [isSharingScreen, startScreenShare, stopScreenShare]);
 
-      // Replace camera track with screen track on all peer connections
-      const screenTrack = stream.getVideoTracks()[0];
-      replaceTrackOnPeers(screenTrack);
-
-      toast('🖥️ Screen sharing started');
-
-      // Handle user clicking browser's "Stop sharing" button
-      screenTrack.addEventListener('ended', () => {
-        stopScreenShare();
-      });
-    } catch {
-      toast('Screen sharing cancelled');
-    }
-  }, [isSharingScreen, setSharing, replaceTrackOnPeers, stopScreenShare]);
-
-  // ── Stable refs for media state (avoid stale closures in socket listener) ──
+  // ── Stable refs for media state (avoid stale closures) ────────────────────
   const isMutedRef      = useRef(isMuted);
   const isCameraOffRef  = useRef(isCameraOff);
   const isSharingRef    = useRef(isSharingScreen);
@@ -200,26 +159,26 @@ export default function RoomPage({ params }: RoomPageProps) {
   useEffect(() => { isCameraOffRef.current = isCameraOff;     }, [isCameraOff]);
   useEffect(() => { isSharingRef.current   = isSharingScreen; }, [isSharingScreen]);
 
-  // ── Incoming host-control commands ────────────────────────────────────────
+  // ── Incoming host-control commands (still over our Socket.io) ────────────
   useEffect(() => {
     if (!socket) return;
 
     const handle = ({ action }: { action: string }) => {
       switch (action) {
         case 'mute':
-          if (!isMutedRef.current) { toggleMute(); toast('🔇 Host muted your microphone'); }
+          if (!isMutedRef.current) { void toggleMute(); toast('🔇 Host muted your microphone'); }
           break;
         case 'unmute':
-          if (isMutedRef.current) { toggleMute(); toast('🎤 Host unmuted your microphone'); }
+          if (isMutedRef.current)  { void toggleMute(); toast('🎤 Host unmuted your microphone'); }
           break;
         case 'camera-off':
-          if (!isCameraOffRef.current) { toggleCamera(); toast('📵 Host turned off your camera'); }
+          if (!isCameraOffRef.current) { void toggleCamera(); toast('📵 Host turned off your camera'); }
           break;
         case 'camera-on':
-          if (isCameraOffRef.current) { toggleCamera(); toast('📷 Host turned on your camera'); }
+          if (isCameraOffRef.current)  { void toggleCamera(); toast('📷 Host turned on your camera'); }
           break;
         case 'stop-screenshare':
-          if (isSharingRef.current) { stopScreenShare(); toast('⏹️ Host stopped your screen share'); }
+          if (isSharingRef.current) { void stopScreenShare(); toast('⏹️ Host stopped your screen share'); }
           break;
       }
     };
@@ -243,17 +202,27 @@ export default function RoomPage({ params }: RoomPageProps) {
   // ── Leave room ────────────────────────────────────────────────────────────
   const handleLeave = useCallback(async () => {
     if (!student) return;
-    stopAll();
-    screenStream?.getTracks().forEach(t => t.stop());
+    await lkDisconnect().catch(() => {});
     socket?.disconnect();
     await leaveRoom(roomCode, student.uid, student.isHost).catch(() => {});
     toast('👋 Left the room');
     setTimeout(() => router.push('/'), 400);
-  }, [student, stopAll, screenStream, socket, roomCode, router]);
+  }, [student, lkDisconnect, socket, roomCode, router]);
 
   if (!student) return null;
 
-  const showSkeleton = iceLoading || (mediaReady && peerCount === 1 && !isConnected);
+  const mediaReady = permission === 'granted' || permission === 'skipped';
+  const showSkeleton = mediaReady && !lkConnected && !lkError;
+
+  // Quality badge — LiveKit returns a 4-state enum; map to the existing
+  // ConnectionQualityBadge shape (unknown/good/degraded/poor/failed).
+  const badgeQuality: 'unknown' | 'good' | 'degraded' | 'poor' | 'failed' =
+    connectionQuality === 'unknown'    ? 'unknown'
+    : connectionQuality === 'excellent' ? 'good'
+    : connectionQuality === 'good'      ? 'good'
+    : connectionQuality === 'poor'      ? 'poor'
+    : connectionQuality === 'lost'      ? 'failed'
+    : 'degraded';
 
   return (
     <div className="page-room">
@@ -268,6 +237,14 @@ export default function RoomPage({ params }: RoomPageProps) {
               ? clearError
               : undefined
           }
+        />
+      )}
+
+      {/* LiveKit connect error */}
+      {lkError && (
+        <RoomError
+          error={{ code: 'LIVEKIT_ERROR', message: lkError }}
+          onDismiss={() => window.location.reload()}
         />
       )}
 
@@ -287,25 +264,32 @@ export default function RoomPage({ params }: RoomPageProps) {
         </div>
         <div className="room-meta">
           <div className="room-code-badge">
-            <span style={{ fontFamily: 'monospace', letterSpacing: 2 }}>{roomCode}</span>
-            <button className="copy-btn" onClick={handleCopyCode} title="Copy code">📋</button>
-            <button className="copy-btn" onClick={handleShareLink} title="Share invite link">🔗</button>
+            <span>{roomCode}</span>
+            <button className="copy-btn" onClick={handleCopyCode} title="Copy room code" aria-label="Copy code">
+              <Icon name="copy" size={14} />
+            </button>
+            <button className="copy-btn" onClick={handleShareLink} title="Share invite link" aria-label="Share">
+              <Icon name="share" size={14} />
+            </button>
           </div>
           <div className="meeting-timer">{formatTime(elapsed)}</div>
           <div className="participants-badge">
-            <span>👥</span>
+            <Icon name="users" size={14} />
             <span>{peerCount}</span>
           </div>
-          {/* v2: connection quality badge */}
-          <ConnectionQualityBadge quality={quality} rtt={rtt} />
+          <ConnectionQualityBadge quality={badgeQuality} rtt={null} />
         </div>
         <Link href="/profile" className="btn btn-sm btn-ghost">Profile</Link>
       </header>
 
+      {/* Pomodoro study timer — shared across the room */}
+      <div className="pomodoro-dock">
+        <Pomodoro isHost={student.isHost} onChange={setTimerState} />
+      </div>
+
       {/* Main layout */}
       <div className="room-layout">
         <main className="video-area">
-          {/* v2: ErrorBoundary catches render errors in video grid */}
           <ErrorBoundary
             fallback={
               <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100%', flexDirection:'column', gap:16 }}>
@@ -315,16 +299,15 @@ export default function RoomPage({ params }: RoomPageProps) {
               </div>
             }
           >
-            {/* v2: loading skeleton while ICE servers fetch */}
             {showSkeleton ? (
               <RoomSkeleton />
             ) : mediaReady ? (
               <VideoGrid
-                localStream={localStream}
                 localName={student.name}
+                localVideoTrack={localVideoTrack}
+                localScreenTrack={localScreenTrack}
                 localMuted={isMuted}
                 localCameraOff={isCameraOff}
-                screenStream={screenStream}
                 isHost={student.isHost}
                 onHostControl={sendHostControl}
                 onHostControlAll={sendHostControlAll}
@@ -349,7 +332,10 @@ export default function RoomPage({ params }: RoomPageProps) {
         onToggleCamera={handleToggleCamera}
         onToggleScreen={handleToggleScreen}
         onLeave={handleLeave}
+        onToggleHand={toggleHand}
+        onReaction={sendReaction}
       />
+
     </div>
   );
 }

@@ -12,17 +12,6 @@
 import 'dotenv/config';
 import * as Sentry from '@sentry/node';
 
-// WebRTC types (browser-only, so we define them here for the server)
-interface RTCSessionDescriptionInit {
-  type: 'offer' | 'answer' | 'pranswer' | 'rollback';
-  sdp?: string;
-}
-interface RTCIceCandidateInit {
-  candidate?: string;
-  sdpMid?: string | null;
-  sdpMLineIndex?: number | null;
-  usernameFragment?: string | null;
-}
 import express, { Request, Response } from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -33,8 +22,10 @@ import { logger } from './utils/logger';
 import { initFirebase } from './services/firebase';
 import { roomStore } from './services/roomStore';
 import { getIceServers } from './services/turn';
+import { createLiveKitToken, getLiveKitUrl, isLiveKitConfigured } from './services/livekit';
 import { generalLimiter, iceLimiter, withRateLimit, clearSocketLimits } from './middleware/rateLimit';
 import { verifyFirebaseToken } from './middleware/auth';
+import { verifyFirebaseBearer } from './middleware/httpAuth';
 
 // ── Sentry (error monitoring) ─────────────────────────────────────────────────
 if (process.env.SENTRY_DSN) {
@@ -69,8 +60,9 @@ app.get('/health', (_req: Request, res: Response) => {
 });
 
 // ── ICE servers endpoint ──────────────────────────────────────────────────────
-// Client calls this on room mount to get fresh TURN credentials.
-// Credentials are short-lived (1hr) and IP-bound — safe to expose per-request.
+// Legacy: only used if LiveKit isn't configured and the app is running in the
+// old mesh-WebRTC mode. LiveKit manages its own TURN, so this endpoint is
+// unused in the default configuration.
 app.get('/ice-servers', iceLimiter, async (req: Request, res: Response) => {
   try {
     const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.ip || '';
@@ -79,6 +71,56 @@ app.get('/ice-servers', iceLimiter, async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, 'Failed to get ICE servers');
     res.status(500).json({ error: 'Failed to get ICE servers' });
+  }
+});
+
+// ── LiveKit token endpoint ────────────────────────────────────────────────────
+// Body: { roomCode: string, name: string }
+// Auth: Authorization: Bearer <Firebase ID token>
+// Returns: { url: string, token: string }
+//
+// We verify the Firebase identity server-side so a malicious client cannot
+// impersonate another user. LiveKit identity = Firebase UID, so each user has
+// exactly one presence per room (duplicate joins evict the prior one).
+app.post('/livekit/token', verifyFirebaseBearer, async (req: Request, res: Response) => {
+  try {
+    if (!isLiveKitConfigured()) {
+      res.status(503).json({
+        error: 'LIVEKIT_NOT_CONFIGURED',
+        message: 'Server is missing LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET. See server/.env.local.example',
+      });
+      return;
+    }
+
+    const { roomCode, name, isHost } = req.body as { roomCode?: string; name?: string; isHost?: boolean };
+    if (!roomCode || !name || typeof roomCode !== 'string' || typeof name !== 'string') {
+      res.status(400).json({ error: 'INVALID_PAYLOAD', message: 'roomCode and name are required' });
+      return;
+    }
+    if (!/^[A-Z]{2}\d-[A-Z0-9]{4}$/.test(roomCode)) {
+      res.status(400).json({ error: 'INVALID_CODE', message: 'Invalid room code format' });
+      return;
+    }
+
+    // Confirm the room exists in Firestore (same check the socket layer does)
+    const validation = await roomStore.validateRoom(roomCode);
+    if (!validation.valid) {
+      res.status(404).json({ error: 'ROOM_NOT_FOUND', message: validation.reason });
+      return;
+    }
+
+    const user = req.user!;
+    const token = await createLiveKitToken({
+      identity: user.uid,
+      name:     name.trim().slice(0, 50),
+      roomName: roomCode,
+      metadata: JSON.stringify({ isHost: Boolean(isHost) }),
+    });
+
+    res.json({ url: getLiveKitUrl(), token });
+  } catch (err) {
+    logger.error({ err }, 'Failed to mint LiveKit token');
+    res.status(500).json({ error: 'TOKEN_ERROR', message: 'Failed to create LiveKit token' });
   }
 });
 
@@ -119,9 +161,10 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Check room capacity
+    // Check room capacity (LiveKit SFU can handle this; the UI will need
+    // pagination / active-speaker focus past ~30 to stay usable)
     if (roomStore.isRoomFull(roomCode)) {
-      socket.emit('error', { code: 'ROOM_FULL', message: 'Room is full (max 8 participants)' });
+      socket.emit('error', { code: 'ROOM_FULL', message: 'Room is full (max 500 participants)' });
       return;
     }
 
@@ -156,48 +199,12 @@ io.on('connection', (socket) => {
     }, 'Peer joined room');
   }));
 
-  // ── WEBRTC SIGNALING ────────────────────────────────────────────────────────
-  // Server is a dumb relay — validates room membership, then forwards.
-
-  socket.on('webrtc-offer', withRateLimit(socket.id, 'webrtc-offer', ({
-    to, offer,
-  }: { to: string; offer: RTCSessionDescriptionInit }) => {
-    const senderRoom   = roomStore.getRoomForSocket(socket.id);
-    const recipientRoom = roomStore.getRoomForSocket(to);
-    if (!senderRoom || senderRoom !== recipientRoom) return; // must be in same room
-
-    socket.to(to).emit('webrtc-offer', { from: socket.id, offer });
-  }));
-
-  socket.on('webrtc-answer', withRateLimit(socket.id, 'webrtc-answer', ({ to, answer }: { to: string; answer: RTCSessionDescriptionInit }) => {
-    const senderRoom    = roomStore.getRoomForSocket(socket.id);
-    const recipientRoom = roomStore.getRoomForSocket(to);
-    if (!senderRoom || senderRoom !== recipientRoom) return;
-
-    socket.to(to).emit('webrtc-answer', { from: socket.id, answer });
-  }));
-
-  socket.on('webrtc-ice', withRateLimit(socket.id, 'webrtc-ice', ({
-    to, candidate,
-  }: { to: string; candidate: RTCIceCandidateInit }) => {
-    const senderRoom    = roomStore.getRoomForSocket(socket.id);
-    const recipientRoom = roomStore.getRoomForSocket(to);
-    if (!senderRoom || senderRoom !== recipientRoom) return;
-
-    socket.to(to).emit('webrtc-ice', { from: socket.id, candidate });
-  }));
-
-  // ── MEDIA STATE ─────────────────────────────────────────────────────────────
-  socket.on('media-state', withRateLimit(socket.id, 'media-state', ({
-    isMuted, isCameraOff,
-  }: { isMuted: boolean; isCameraOff: boolean }) => {
-    const roomCode = roomStore.getRoomForSocket(socket.id);
-    if (!roomCode) return;
-
-    socket.to(roomCode).emit('peer-media-state', {
-      socketId: socket.id, isMuted, isCameraOff,
-    });
-  }));
+  // ── MEDIA SIGNALING IS HANDLED BY LIVEKIT ───────────────────────────────────
+  // Previously this file relayed webrtc-offer/answer/ice and media-state for a
+  // P2P mesh. With LiveKit SFU, clients talk directly to the LiveKit server;
+  // track publish / subscribe / mute state all flow through LiveKit's own
+  // protocol. This Socket.io server now only handles presence (join/leave),
+  // host controls, reactions, raise-hand, and the Pomodoro timer.
 
   // ── HOST CONTROLS ───────────────────────────────────────────────────────────
   // Only the room host (uid matching room.hostUid) can send these.
@@ -234,6 +241,96 @@ io.on('connection', (socket) => {
     socket.to(roomCode).emit('host-control', { action });
     logger.info({ socketId: socket.id, roomCode, action }, 'Host control broadcast to all');
   }));
+
+  // ── REACTIONS ───────────────────────────────────────────────────────────────
+  // Any participant can send a brief emoji reaction that floats up on everyone's
+  // screen. Not persisted. Server just validates and broadcasts.
+  socket.on('room:reaction', withRateLimit(socket.id, 'room:reaction', ({
+    emoji,
+  }: { emoji: string }) => {
+    const roomCode = roomStore.getRoomForSocket(socket.id);
+    if (!roomCode) return;
+    if (typeof emoji !== 'string' || emoji.length === 0 || emoji.length > 16) return;
+
+    const peer = roomStore.getPeer(socket.id);
+    if (!peer) return;
+
+    io.to(roomCode).emit('room:reaction', {
+      id: `${socket.id}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      socketId: socket.id,
+      name: peer.name,
+      emoji,
+    });
+  }));
+
+  // ── RAISE HAND ──────────────────────────────────────────────────────────────
+  // Any participant can toggle their hand raised / lowered. Broadcast to the
+  // room so everyone (especially the host) sees who has raised their hand.
+  socket.on('room:raise-hand', withRateLimit(socket.id, 'room:raise-hand', ({
+    raised,
+  }: { raised: boolean }) => {
+    const roomCode = roomStore.getRoomForSocket(socket.id);
+    if (!roomCode) return;
+
+    const peer = roomStore.getPeer(socket.id);
+    if (!peer) return;
+
+    io.to(roomCode).emit('room:raise-hand', {
+      socketId: socket.id,
+      name: peer.name,
+      raised: Boolean(raised),
+    });
+  }));
+
+  // ── POMODORO TIMER ──────────────────────────────────────────────────────────
+  // Host-controlled shared countdown visible to all participants in the room.
+  // Server doesn't persist — clients that join late receive current state
+  // via a replay on join (see below).
+  //
+  // A timer message looks like:
+  //   { phase: 'focus' | 'break' | 'idle', startedAt: ms, duration: seconds,
+  //     action: 'start' | 'pause' | 'reset' | 'tick' }
+  //
+  // We keep the latest per-room state in memory so late joiners can sync.
+  const roomTimers = (globalThis as unknown as { __roomTimers?: Map<string, unknown> }).__roomTimers
+    ?? new Map<string, unknown>();
+  (globalThis as unknown as { __roomTimers: Map<string, unknown> }).__roomTimers = roomTimers;
+
+  socket.on('room:timer', withRateLimit(socket.id, 'room:timer', (payload: {
+    phase: 'focus' | 'break' | 'idle';
+    action: 'start' | 'pause' | 'reset';
+    duration: number;       // seconds
+    startedAt: number;      // ms since epoch when the current run started
+    remaining?: number;     // seconds remaining when paused
+  }) => {
+    const roomCode = roomStore.getRoomForSocket(socket.id);
+    if (!roomCode) return;
+
+    // Only host can drive the timer
+    if (roomStore.getHostUid(roomCode) !== uid) {
+      socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can control the timer' });
+      return;
+    }
+
+    // Light validation
+    if (typeof payload.duration !== 'number' || payload.duration < 0 || payload.duration > 7200) return;
+    if (!['focus', 'break', 'idle'].includes(payload.phase)) return;
+    if (!['start', 'pause', 'reset'].includes(payload.action)) return;
+
+    roomTimers.set(roomCode, payload);
+    io.to(roomCode).emit('room:timer', payload);
+    logger.info({ roomCode, action: payload.action, phase: payload.phase }, 'Timer update');
+  }));
+
+  // When a peer joins, send the current timer state (if any) just to that peer.
+  // Hooked into the 'join-room' flow by emitting here after the fact.
+  // Simpler: reply when a client asks for it.
+  socket.on('room:timer-sync', () => {
+    const roomCode = roomStore.getRoomForSocket(socket.id);
+    if (!roomCode) return;
+    const state = roomTimers.get(roomCode);
+    if (state) socket.emit('room:timer', state);
+  });
 
   // ── DISCONNECT ──────────────────────────────────────────────────────────────
   socket.on('disconnect', (reason) => {

@@ -158,7 +158,12 @@ class RoomStore {
   }
 
   // ── Max peers guard ──────────────────────────────────────────────────────
-  isRoomFull(roomCode: string, maxPeers = 8): boolean {
+  // With LiveKit SFU, each client only uploads one stream (to the server) so
+  // bandwidth scales linearly with server uplink, not quadratically.
+  // The 500 cap is set high to support webinar-style sessions; for usable
+  // UX past ~30 participants the client should adopt active-speaker focus
+  // and/or pagination instead of rendering every tile at once.
+  isRoomFull(roomCode: string, maxPeers = 500): boolean {
     return (this.rooms.get(roomCode)?.peers.size ?? 0) >= maxPeers;
   }
 

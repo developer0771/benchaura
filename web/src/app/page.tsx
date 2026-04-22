@@ -8,6 +8,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { Icon } from '@/components/ui/Icon';
 
 export default function HomePage() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -99,9 +100,7 @@ export default function HomePage() {
         <div className="hero-cta">
           <Link href="/join" className="btn btn-primary btn-lg">
             <span>Start a Room</span>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M5 12h14M12 5l7 7-7 7" />
-            </svg>
+            <Icon name="arrowRight" size={16} />
           </Link>
           <a href="#how" className="btn btn-ghost btn-lg">See how it works</a>
         </div>
@@ -128,9 +127,11 @@ export default function HomePage() {
               ))}
             </div>
             <div className="preview-controls">
-              <span className="pc-btn">🎤</span>
-              <span className="pc-btn">📷</span>
-              <span className="pc-btn red">✕ Leave</span>
+              <span className="pc-btn"><Icon name="mic" size={14} /></span>
+              <span className="pc-btn"><Icon name="video" size={14} /></span>
+              <span className="pc-btn"><Icon name="screen" size={14} /></span>
+              <span className="pc-btn"><Icon name="chat" size={14} /></span>
+              <span className="pc-btn red"><Icon name="phoneOff" size={14} /> Leave</span>
             </div>
           </div>
         </div>
@@ -152,16 +153,16 @@ export default function HomePage() {
         <div className="section-label">Platform Features</div>
         <h2 className="section-title">Everything your study group needs</h2>
         <div className="features-grid">
-          {[
-            { icon: '🎥', title: 'HD Video Conferencing', desc: 'Crystal-clear video with adaptive quality that works even on slower connections.', large: true },
-            { icon: '💬', title: 'Live Chat',             desc: 'Share links, ask questions, and collaborate in real-time — backed by Firebase.' },
-            { icon: '🖥️', title: 'Screen Sharing',        desc: 'Share your screen, slides, or code with one click. Perfect for group problem solving.' },
-            { icon: '🔐', title: 'Private Rooms',         desc: 'Every session gets a unique room code. Only your study group can join.', large: true },
-            { icon: '🔔', title: 'Noise Control',         desc: 'Mute/unmute your mic anytime. See who is speaking in real time.' },
-            { icon: '📱', title: 'Works Everywhere',      desc: 'Runs in any modern browser on desktop, tablet, or mobile. Zero downloads.' },
-          ].map((f) => (
+          {([
+            { icon: 'hd',      title: 'HD Video Conferencing', desc: 'Crystal-clear video with adaptive quality that works even on slower connections.', large: true  },
+            { icon: 'chat',    title: 'Live Chat',             desc: 'Share links, ask questions, and collaborate in real-time — backed by Firebase.',      large: false },
+            { icon: 'screen',  title: 'Screen Sharing',        desc: 'Share your screen, slides, or code with one click. Perfect for group problem solving.', large: false },
+            { icon: 'lock',    title: 'Private Rooms',         desc: 'Every session gets a unique room code. Only your study group can join.',              large: true  },
+            { icon: 'volume',  title: 'Noise Control',         desc: 'Mute/unmute your mic anytime. See who is speaking in real time.',                    large: false },
+            { icon: 'devices', title: 'Works Everywhere',      desc: 'Runs in any modern browser on desktop, tablet, or mobile. Zero downloads.',           large: false },
+          ] as const).map((f) => (
             <div key={f.title} className={`feature-card${f.large ? ' feature-large' : ''}`}>
-              <div className="feature-icon">{f.icon}</div>
+              <div className="feature-icon"><Icon name={f.icon} size={22} /></div>
               <h3>{f.title}</h3>
               <p>{f.desc}</p>
             </div>
@@ -191,10 +192,8 @@ export default function HomePage() {
         </div>
         <div className="cta-center">
           <Link href="/join" className="btn btn-primary btn-lg">
-            Create Your Room
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M5 12h14M12 5l7 7-7 7" />
-            </svg>
+            Create your room
+            <Icon name="arrowRight" size={18} />
           </Link>
         </div>
       </section>

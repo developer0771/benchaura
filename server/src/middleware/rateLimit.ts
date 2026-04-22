@@ -44,12 +44,15 @@ interface EventCount {
 
 const socketEventCounts = new Map<string, Map<string, EventCount>>();
 
+// With LiveKit handling WebRTC, the socket layer only carries presence,
+// host controls, and room "social" events (reactions / hand / timer).
 const EVENT_LIMITS: Record<string, { max: number; windowMs: number }> = {
-  'join-room':    { max: 5,   windowMs: 60_000 },   // 5 joins per minute
-  'webrtc-offer':  { max: 30,  windowMs: 60_000 },   // 30 offers per minute
-  'webrtc-answer': { max: 30,  windowMs: 60_000 },   // 30 answers per minute
-  'webrtc-ice':   { max: 200, windowMs: 60_000 },   // 200 ICE candidates per minute
-  'media-state':  { max: 60,  windowMs: 60_000 },   // 60 state changes per minute
+  'join-room':       { max: 5,   windowMs: 60_000 },   // 5 joins per minute
+  'host-control':    { max: 60,  windowMs: 60_000 },   // host mute/cam toggles
+  'host-control-all':{ max: 20,  windowMs: 60_000 },   // host broadcast commands
+  'room:reaction':   { max: 40,  windowMs: 60_000 },   // 40 reactions per minute
+  'room:raise-hand': { max: 20,  windowMs: 60_000 },   // 20 raise/lower per minute
+  'room:timer':      { max: 20,  windowMs: 60_000 },   // 20 timer commands per minute (host only)
 };
 
 export function isSocketRateLimited(socketId: string, event: string): boolean {
