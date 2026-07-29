@@ -27,6 +27,16 @@ import { generalLimiter, iceLimiter, withRateLimit, clearSocketLimits } from './
 import { verifyFirebaseToken } from './middleware/auth';
 import { verifyFirebaseBearer } from './middleware/httpAuth';
 
+interface RoomTimerState {
+  phase: 'focus' | 'break' | 'idle';
+  action: 'start' | 'pause' | 'reset';
+  duration: number;
+  startedAt: number;
+  remaining: number;
+}
+
+const roomTimers = new Map<string, RoomTimerState>();
+
 // ── Sentry (error monitoring) ─────────────────────────────────────────────────
 if (process.env.SENTRY_DSN) {
   Sentry.init({
@@ -154,6 +164,13 @@ io.on('connection', (socket) => {
       return;
     }
 
+    const currentRoomCode = roomStore.getRoomForSocket(socket.id);
+    if (currentRoomCode === roomCode) return;
+    if (currentRoomCode) {
+      socket.emit('error', { code: 'ALREADY_IN_ROOM', message: 'Leave the current room before joining another one' });
+      return;
+    }
+
     // Check room exists in Firestore
     const validation = await roomStore.validateRoom(roomCode);
     if (!validation.valid) {
@@ -177,10 +194,11 @@ io.on('connection', (socket) => {
     // Register peer — use authoritative hostUid from Firestore (falls back to
     // joining uid only if Firestore lookup failed, which is rare).
     roomStore.ensureRoom(roomCode, validation.hostUid ?? uid);
+    const displayName = name.trim().slice(0, 50);
     roomStore.addPeer(roomCode, {
       socketId: socket.id,
       uid,
-      name: name.trim().slice(0, 50), // sanitize length
+      name: displayName,
       joinedAt: Date.now(),
     });
 
@@ -192,7 +210,7 @@ io.on('connection', (socket) => {
     })));
 
     // Tell existing peers about the new peer (they'll receive offers from them)
-    socket.to(roomCode).emit('peer-joined', { socketId: socket.id, uid, name });
+    socket.to(roomCode).emit('peer-joined', { socketId: socket.id, uid, name: displayName });
 
     logger.info({
       socketId: socket.id, roomCode, name, totalPeers: existingPeers.length + 1,
@@ -222,11 +240,14 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Target must be in the same room
-    if (roomStore.getRoomForSocket(targetSocketId) !== roomCode) return;
+    const targetPeer = roomStore.getPeerByUid(roomCode, targetSocketId)
+      ?? (roomStore.getRoomForSocket(targetSocketId) === roomCode
+        ? roomStore.getPeer(targetSocketId)
+        : undefined);
+    if (!targetPeer) return;
 
-    socket.to(targetSocketId).emit('host-control', { action });
-    logger.info({ socketId: socket.id, targetSocketId, action }, 'Host control relayed');
+    socket.to(targetPeer.socketId).emit('host-control', { action });
+    logger.info({ socketId: socket.id, targetSocketId: targetPeer.socketId, action }, 'Host control relayed');
   }));
 
   // Broadcast to all participants in the room (except host)
@@ -258,6 +279,7 @@ io.on('connection', (socket) => {
     io.to(roomCode).emit('room:reaction', {
       id: `${socket.id}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
       socketId: socket.id,
+      uid: peer.uid,
       name: peer.name,
       emoji,
     });
@@ -277,6 +299,7 @@ io.on('connection', (socket) => {
 
     io.to(roomCode).emit('room:raise-hand', {
       socketId: socket.id,
+      uid: peer.uid,
       name: peer.name,
       raised: Boolean(raised),
     });
@@ -292,17 +315,7 @@ io.on('connection', (socket) => {
   //     action: 'start' | 'pause' | 'reset' | 'tick' }
   //
   // We keep the latest per-room state in memory so late joiners can sync.
-  const roomTimers = (globalThis as unknown as { __roomTimers?: Map<string, unknown> }).__roomTimers
-    ?? new Map<string, unknown>();
-  (globalThis as unknown as { __roomTimers: Map<string, unknown> }).__roomTimers = roomTimers;
-
-  socket.on('room:timer', withRateLimit(socket.id, 'room:timer', (payload: {
-    phase: 'focus' | 'break' | 'idle';
-    action: 'start' | 'pause' | 'reset';
-    duration: number;       // seconds
-    startedAt: number;      // ms since epoch when the current run started
-    remaining?: number;     // seconds remaining when paused
-  }) => {
+  socket.on('room:timer', withRateLimit(socket.id, 'room:timer', (payload: RoomTimerState) => {
     const roomCode = roomStore.getRoomForSocket(socket.id);
     if (!roomCode) return;
 
@@ -313,7 +326,9 @@ io.on('connection', (socket) => {
     }
 
     // Light validation
-    if (typeof payload.duration !== 'number' || payload.duration < 0 || payload.duration > 7200) return;
+    if (!Number.isFinite(payload.duration) || payload.duration < 0 || payload.duration > 7200) return;
+    if (!Number.isFinite(payload.startedAt) || payload.startedAt < 0) return;
+    if (!Number.isFinite(payload.remaining) || payload.remaining < 0 || payload.remaining > 7200) return;
     if (!['focus', 'break', 'idle'].includes(payload.phase)) return;
     if (!['start', 'pause', 'reset'].includes(payload.action)) return;
 
@@ -339,6 +354,7 @@ io.on('connection', (socket) => {
 
     if (result) {
       io.to(result.roomCode).emit('peer-left', { socketId: socket.id });
+      if (result.remaining === 0) roomTimers.delete(result.roomCode);
       logger.info({
         socketId: socket.id, roomCode: result.roomCode,
         name: result.peer.name, reason, remaining: result.remaining,

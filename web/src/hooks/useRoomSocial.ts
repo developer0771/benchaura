@@ -11,6 +11,7 @@ import { useRoomStore, type Reaction, type TimerState } from '@/store/useRoomSto
 
 interface UseRoomSocialProps {
   socket: Socket | null;
+  uid: string;
   /** How long each reaction stays on screen, in ms. */
   reactionTtl?: number;
 }
@@ -22,7 +23,7 @@ interface UseRoomSocialReturn {
   requestTimerSync: () => void;
 }
 
-export function useRoomSocial({ socket, reactionTtl = 4000 }: UseRoomSocialProps): UseRoomSocialReturn {
+export function useRoomSocial({ socket, uid, reactionTtl = 4000 }: UseRoomSocialProps): UseRoomSocialReturn {
   const {
     pushReaction, expireReaction, setPeerHand, setTimer,
     localHandRaised, setLocalHandRaised,
@@ -32,9 +33,14 @@ export function useRoomSocial({ socket, reactionTtl = 4000 }: UseRoomSocialProps
   useEffect(() => {
     if (!socket) return;
 
-    const onReaction = (r: Reaction) => {
-      pushReaction({ ...r, at: Date.now() });
-      window.setTimeout(() => expireReaction(r.id), reactionTtl);
+    const onReaction = (reaction: Reaction & { uid?: string }) => {
+      const normalizedReaction = {
+        ...reaction,
+        socketId: reaction.uid || reaction.socketId,
+        at: Date.now(),
+      };
+      pushReaction(normalizedReaction);
+      window.setTimeout(() => expireReaction(reaction.id), reactionTtl);
     };
 
     socket.on('room:reaction', onReaction);
@@ -45,18 +51,24 @@ export function useRoomSocial({ socket, reactionTtl = 4000 }: UseRoomSocialProps
   useEffect(() => {
     if (!socket) return;
 
-    const onHand = ({ socketId, name, raised }: { socketId: string; name: string; raised: boolean }) => {
+    const onHand = ({ socketId, uid: participantUid, name, raised }: {
+      socketId: string;
+      uid?: string;
+      name: string;
+      raised: boolean;
+    }) => {
+      const identity = participantUid || socketId;
       // Self-state is tracked via localHandRaised; the server still broadcasts
       // to us, which we use to keep the two in lockstep in case of a retry.
-      if (socketId === socket.id) {
+      if (identity === uid) {
         setLocalHandRaised(raised);
       }
-      setPeerHand(socketId, name, raised);
+      setPeerHand(identity, name, raised);
     };
 
     socket.on('room:raise-hand', onHand);
     return () => { socket.off('room:raise-hand', onHand); };
-  }, [socket, setPeerHand, setLocalHandRaised]);
+  }, [socket, uid, setPeerHand, setLocalHandRaised]);
 
   // ── Incoming: pomodoro timer ──────────────────────────────────────────────
   useEffect(() => {

@@ -19,7 +19,11 @@ export interface SocketError {
   message: string;
 }
 
-export function useSocket() {
+interface UseSocketOptions {
+  enabled?: boolean;
+}
+
+export function useSocket({ enabled = true }: UseSocketOptions = {}) {
   const socketRef    = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [socketError, setSocketError] = useState<SocketError | null>(null);
@@ -34,10 +38,17 @@ export function useSocket() {
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      setIsConnected(false);
+      return;
+    }
+
     let socket: Socket;
+    let cancelled = false;
 
     const connect = async () => {
       const token = await getToken();
+      if (cancelled) return;
 
       socket = io(SOCKET_URL, {
         // Send Firebase token so the server can verify identity
@@ -97,11 +108,13 @@ export function useSocket() {
     connect();
 
     return () => {
+      cancelled = true;
       console.log('[Socket] Cleaning up');
       socket?.disconnect();
       socketRef.current = null;
+      setIsConnected(false);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [enabled, getToken]);
 
   const clearError = useCallback(() => setSocketError(null), []);
 

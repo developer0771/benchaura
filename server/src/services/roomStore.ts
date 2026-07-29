@@ -10,7 +10,6 @@
 
 import { getFirestore } from './firebase';
 import { logger, roomLogger } from '../utils/logger';
-import { v4 as uuidv4 } from 'uuid';
 
 export interface Peer {
   socketId: string;
@@ -65,7 +64,6 @@ class RoomStore {
       const snap = await db.collection('rooms').doc(roomCode).get();
       if (!snap.exists) return { valid: false, reason: 'Room not found' };
       const data = snap.data()!;
-      if (!data.isActive) return { valid: false, reason: 'Room has ended' };
       return { valid: true, hostUid: data.hostUid };
     } catch (err) {
       logger.error({ err, roomCode }, 'Firestore validation failed — allowing join');
@@ -124,19 +122,16 @@ class RoomStore {
     roomLogger(roomCode).info({ socketId, name: peer.name, remaining }, 'Peer left');
 
     if (remaining === 0) {
-      // Mark room inactive in Firestore after grace period
-      setTimeout(async () => {
+      // Empty room — drop in-memory state after a long grace to free RAM.
+      // Do NOT mark the Firestore room isActive:false: a window-switch or
+      // network blip can drop the only socket, and ending the room here
+      // would leave the user with a dead code when they come back.
+      setTimeout(() => {
         if (this.rooms.get(roomCode)?.peers.size === 0) {
           this.rooms.delete(roomCode);
-          const db = getFirestore();
-          if (db) {
-            await db.collection('rooms').doc(roomCode)
-              .update({ isActive: false, endedAt: Date.now() })
-              .catch(() => {});
-          }
-          roomLogger(roomCode).info('Room cleaned up');
+          roomLogger(roomCode).info('Empty room evicted from memory');
         }
-      }, 30_000);
+      }, 5 * 60_000);
     } else {
       this.persistRoom(roomCode);
     }
@@ -177,6 +172,11 @@ class RoomStore {
     const roomCode = this.socketToRoom.get(socketId);
     if (!roomCode) return undefined;
     return this.rooms.get(roomCode)?.peers.get(socketId);
+  }
+
+  getPeerByUid(roomCode: string, uid: string): Peer | undefined {
+    return [...(this.rooms.get(roomCode)?.peers.values() ?? [])]
+      .find(peer => peer.uid === uid);
   }
 }
 

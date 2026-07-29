@@ -44,12 +44,19 @@ interface RoomPageProps {
 export default function RoomPage({ params }: RoomPageProps) {
   const { code: roomCode } = params;
   const router = useRouter();
-  const { student } = useAuthStore();
+  const { student, firebaseUser, isAuthLoading, updateStudent } = useAuthStore();
+  const canEnterRoom = !!student && !!firebaseUser && !isAuthLoading;
+  const resetRoom = useRoomStore(s => s.reset);
 
   // ── Guard: redirect if not authenticated ──────────────────────────────────
   useEffect(() => {
-    if (!student) router.replace('/join');
-  }, [student, router]);
+    if (!isAuthLoading && (!student || !firebaseUser)) router.replace('/join');
+  }, [student, firebaseUser, isAuthLoading, router]);
+
+  useEffect(() => {
+    resetRoom();
+    useRoomStore.getState().setRoomCode(roomCode);
+  }, [roomCode, resetRoom]);
 
   // ── Timer ─────────────────────────────────────────────────────────────────
   const [elapsed, setElapsed] = useState(0);
@@ -60,7 +67,7 @@ export default function RoomPage({ params }: RoomPageProps) {
   }, [startTime]);
 
   // ── Socket (presence, chat, reactions, host controls) ────────────────────
-  const { socket, isConnected, socketError, clearError } = useSocket();
+  const { socket, isConnected, socketError, clearError } = useSocket({ enabled: canEnterRoom });
 
   // ── LiveKit (media) ───────────────────────────────────────────────────────
   // Note: localAudioTrack is intentionally unused in the grid — LiveKit
@@ -81,15 +88,20 @@ export default function RoomPage({ params }: RoomPageProps) {
     roomCode,
     displayName: student?.name ?? 'Guest',
     isHost:      !!student?.isHost,
-    enabled:     !!student,
+    enabled:     canEnterRoom,
   });
 
   // ── Join signaling room (for presence + chat/reactions/timer) ────────────
   const hasJoinedRef = useRef(false);
   useEffect(() => {
-    if (!socket || !isConnected || !student || hasJoinedRef.current) return;
+    if (!isConnected) {
+      hasJoinedRef.current = false;
+      return;
+    }
+    if (!socket || !student || hasJoinedRef.current) return;
     hasJoinedRef.current = true;
     socket.emit('join-room', { roomCode, name: student.name });
+    socket.emit('room:timer-sync');
     toast(`🎉 Joined room ${roomCode}`);
   }, [socket, isConnected, student, roomCode]);
 
@@ -101,7 +113,10 @@ export default function RoomPage({ params }: RoomPageProps) {
   });
 
   // ── Reactions, raise hand, pomodoro (socket-driven) ──────────────────────
-  const { sendReaction, toggleHand, setTimerState } = useRoomSocial({ socket });
+  const { sendReaction, toggleHand, setTimerState } = useRoomSocial({
+    socket,
+    uid: student?.uid ?? '',
+  });
 
   // ── Peer count (LiveKit-backed) ──────────────────────────────────────────
   const peers     = useRoomStore(s => s.peers);
@@ -146,8 +161,9 @@ export default function RoomPage({ params }: RoomPageProps) {
       await stopScreenShare();
       toast('⏹️ Screen sharing stopped');
     } else {
-      await startScreenShare();
-      if (isSharingScreen) toast('🖥️ Screen sharing started');
+      const started = await startScreenShare();
+      if (!started) return;
+      toast('🖥️ Screen sharing started');
     }
   }, [isSharingScreen, startScreenShare, stopScreenShare]);
 
@@ -200,16 +216,26 @@ export default function RoomPage({ params }: RoomPageProps) {
   }, [socket]);
 
   // ── Leave room ────────────────────────────────────────────────────────────
+  // Set isLeaving BEFORE any cleanup so the render path can suppress the
+  // RoomError overlays. Without this guard, the host briefly sees a "Room
+  // has ended" / "Room not found" error during the 400ms redirect window:
+  // leaveRoom() flips Firestore isActive:false, LiveKit / socket re-validate,
+  // server returns ROOM_NOT_FOUND, RoomError modal renders — and only THEN
+  // the navigation runs.
+  const [isLeaving, setIsLeaving] = useState(false);
   const handleLeave = useCallback(async () => {
-    if (!student) return;
+    if (!student || isLeaving) return;
+    setIsLeaving(true);
     await lkDisconnect().catch(() => {});
     socket?.disconnect();
     await leaveRoom(roomCode, student.uid, student.isHost).catch(() => {});
+    updateStudent({ currentRoomCode: null, isHost: false });
+    resetRoom();
     toast('👋 Left the room');
     setTimeout(() => router.push('/'), 400);
-  }, [student, lkDisconnect, socket, roomCode, router]);
+  }, [student, isLeaving, lkDisconnect, socket, roomCode, router, updateStudent, resetRoom]);
 
-  if (!student) return null;
+  if (!canEnterRoom || !student) return null;
 
   const mediaReady = permission === 'granted' || permission === 'skipped';
   const showSkeleton = mediaReady && !lkConnected && !lkError;
@@ -228,8 +254,8 @@ export default function RoomPage({ params }: RoomPageProps) {
     <div className="page-room">
       <ToastContainer />
 
-      {/* Socket error overlay */}
-      {socketError && (
+      {/* Socket error overlay — suppressed while leaving */}
+      {!isLeaving && socketError && (
         <RoomError
           error={socketError}
           onDismiss={
@@ -240,8 +266,8 @@ export default function RoomPage({ params }: RoomPageProps) {
         />
       )}
 
-      {/* LiveKit connect error */}
-      {lkError && (
+      {/* LiveKit connect error — suppressed while leaving */}
+      {!isLeaving && lkError && (
         <RoomError
           error={{ code: 'LIVEKIT_ERROR', message: lkError }}
           onDismiss={() => window.location.reload()}

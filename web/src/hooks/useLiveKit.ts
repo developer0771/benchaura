@@ -62,7 +62,7 @@ interface UseLiveKitReturn {
   requestAudioOnly: () => Promise<void>;
   toggleMute: () => Promise<void>;
   toggleCamera: () => Promise<void>;
-  startScreenShare: () => Promise<void>;
+  startScreenShare: () => Promise<boolean>;
   stopScreenShare: () => Promise<void>;
   disconnect: () => Promise<void>;
 }
@@ -103,6 +103,19 @@ export function useLiveKit({
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
   const [isSharingScreen, setIsSharingScreen] = useState(false);
+  const localTracksRef = useRef({
+    video: null as LocalVideoTrack | null,
+    audio: null as LocalAudioTrack | null,
+    screen: null as LocalVideoTrack | null,
+  });
+
+  useEffect(() => {
+    localTracksRef.current = {
+      video: localVideoTrack,
+      audio: localAudioTrack,
+      screen: localScreenTrack,
+    };
+  }, [localVideoTrack, localAudioTrack, localScreenTrack]);
 
   const {
     addPeer, removePeer, updatePeerTracks, updatePeerMediaState,
@@ -348,38 +361,44 @@ export function useLiveKit({
     setIsCameraOff(next);
   }, [isCameraOff, localVideoTrack]);
 
-  const startScreenShare = useCallback(async () => {
+  const startScreenShare = useCallback(async (): Promise<boolean> => {
     const room = roomRef.current;
-    if (!room || isSharingScreen) return;
+    if (!room || isSharingScreen) return false;
     try {
       const tracks = await createLocalScreenTracks({ audio: false });
       const videoTrack = tracks.find(t => t.kind === Track.Kind.Video) as LocalVideoTrack | undefined;
-      if (!videoTrack) return;
+      if (!videoTrack) return false;
       await room.localParticipant.publishTrack(videoTrack, { source: Track.Source.ScreenShare });
       setLocalScreenTrack(videoTrack);
       setIsSharingScreen(true);
 
       // Browser "Stop sharing" button — the track fires 'ended'
       videoTrack.mediaStreamTrack.addEventListener('ended', () => {
-        void stopScreenShare();
+        void room.localParticipant.unpublishTrack(videoTrack).catch(() => {});
+        videoTrack.stop();
+        setLocalScreenTrack(current => current === videoTrack ? null : current);
+        setIsSharingScreen(false);
       });
+      return true;
     } catch (err) {
       console.warn('[LiveKit] Screen share cancelled / failed:', err);
+      return false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSharingScreen]);
 
   const stopScreenShare = useCallback(async () => {
     const room = roomRef.current;
-    if (!room || !localScreenTrack) {
+    const screenTrack = localScreenTrack;
+    if (!screenTrack) {
       setIsSharingScreen(false);
       setLocalScreenTrack(null);
       return;
     }
     try {
-      await room.localParticipant.unpublishTrack(localScreenTrack);
-      localScreenTrack.stop();
+      if (room) await room.localParticipant.unpublishTrack(screenTrack);
     } finally {
+      screenTrack.stop();
       setLocalScreenTrack(null);
       setIsSharingScreen(false);
     }
@@ -399,12 +418,11 @@ export function useLiveKit({
   // ── Cleanup on unmount ─────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
-      // Effect cleanup above handles room.disconnect; also stop local tracks
-      localVideoTrack?.stop();
-      localAudioTrack?.stop();
-      localScreenTrack?.stop();
+      const tracks = localTracksRef.current;
+      tracks.video?.stop();
+      tracks.audio?.stop();
+      tracks.screen?.stop();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const isConnected = connectionState === ConnectionState.Connected;

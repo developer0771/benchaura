@@ -35,7 +35,7 @@ export default function JoinPage() {
 function JoinPageContent() {
   const router      = useRouter();
   const searchParams = useSearchParams();
-  const { setStudent, firebaseUser } = useAuthStore();
+  const { setFirebaseUser, setStudent, firebaseUser } = useAuthStore();
 
   const [tab,      setTab]      = useState<RoomTab>('create');
   const [authMode, setAuthMode] = useState<AuthMode>('login');
@@ -45,13 +45,17 @@ function JoinPageContent() {
   const [email,     setEmail]     = useState('');
   const [password,  setPassword]  = useState('');
   const [course,    setCourse]    = useState('');
-  const [roomCode,  setRoomCode]  = useState(() => generateRoomCode());
+  const [roomCode,  setRoomCode]  = useState('');
   const [joinCode,  setJoinCode]  = useState('');
 
   // UI state
   const [isLoading, setIsLoading] = useState(false);
   const [errors,    setErrors]    = useState<Record<string, string>>({});
   const [showPass,  setShowPass]  = useState(false);
+
+  useEffect(() => {
+    setRoomCode(generateRoomCode());
+  }, []);
 
   // ── Pre-fill join code from share link (?room=XX0-ABCD) ──────────────────
   useEffect(() => {
@@ -107,6 +111,7 @@ function JoinPageContent() {
 
     if (tab === 'create') {
       if (!course.trim()) e.course = 'Course is required';
+      if (!roomCode) e.general = 'Room code is still being prepared. Try again in a moment.';
     } else {
       if (!joinCode.trim()) e.joinCode = 'Room code is required';
       else if (!isValidRoomCode(joinCode)) e.joinCode = 'Invalid format (e.g. CS4-AB2X)';
@@ -166,7 +171,14 @@ function JoinPageContent() {
         }
       }
 
-      const userName  = (name.trim() || firebaseUser?.displayName || userEmail.split('@')[0]);
+      const signedInUser = auth.currentUser;
+      if (signedInUser) {
+        setFirebaseUser(signedInUser);
+        uid = signedInUser.uid;
+        userEmail = signedInUser.email || userEmail;
+      }
+
+      const userName  = (name.trim() || signedInUser?.displayName || firebaseUser?.displayName || userEmail.split('@')[0]);
       const userCourse = course.trim() || 'Not specified';
 
       await upsertUserProfile(uid!, { name: userName, email: userEmail, course: userCourse });
@@ -420,7 +432,7 @@ function JoinPageContent() {
                 <div className="form-group room-code-group">
                   <label>Your Room Code</label>
                   <div className="room-code-display">
-                    <span className="code-text">{roomCode}</span>
+                    <span className="code-text">{roomCode || 'Preparing...'}</span>
                     <button type="button" className="refresh-btn" title="Generate new code"
                       onClick={() => setRoomCode(generateRoomCode())}>
                       <Icon name="refresh" size={16} />
