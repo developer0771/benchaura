@@ -88,9 +88,9 @@ service cloud.firestore {
       allow update: if isAuth() && (
         // CASE 1: Participant joining — only participants array changes, room must be active
         (
-          resource.data.isActive == true
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['participants'])
-          && request.resource.data.participants.size() <= 8  // max 8 participants
+          request.resource.data.isActive == true
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['participants', 'isActive'])
+          && request.resource.data.participants.size() <= 500  // max 500 participants (LiveKit SFU)
         )
         ||
         // CASE 2: Host closing or managing room — can change any field

@@ -17,3 +17,9 @@ services:
         sync: false
       - key: FIREBASE_PROJECT_ID
         sync: false
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false

@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(kill %1)",
+      "Bash(grep \"Only in 'C:\\\\\\\\\\\\\\\\Users\\\\\\\\\\\\\\\\Shudhanshu\\\\\\\\\\\\\\\\Downloads\\\\\\\\\\\\\\\\benchaura-FINAL\")",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(gh pr create --base main --head feature/v3-social-pomodoro-google-auth --title 'feat: Google Sign-In, hybrid palette, chat polish, reactions + Pomodoro' --body ' *)",
+      "Bash(netstat -ano)",
+      "Bash(findstr \":3000 :4000\")",
+      "Bash(findstr LISTENING)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(gh pr *)",
+      "Bash(gh api *)",
+      "Bash(cat next.config.js)",
+      "Bash(cat next.config.mjs)",
+      "Bash(git rev-list *)",
+      "Read(//c/Users/SHUDHA~1/AppData/Local/Temp/claude/C--Users-Shudhanshu-Downloads-benchaura-v2-complete/49b42ff4-dbe6-49e2-b957-69ca647a702c/tasks/**)",
+      "Bash(findstr \":4000\")",
+      "Bash(findstr \":3000 \")",
+      "Bash(curl -s -o /dev/null -w \"server:%{http_code}\\\\n\" http://localhost:4000/healthz)",
+      "Bash(findstr -E \":3000 |:4000 \")",
+      "Bash(findstr -E \"3000|4000\")",
+      "Bash(netstat -ano -p tcp)",
+      "Bash(taskkill //F //PID 29668)",
+      "Bash(tasklist)",
+      "Bash(taskkill //F //PID 8392)",
+      "Bash(taskkill //F //PID 4032)",
+      "Bash(taskkill //F //PID 28052 //T)",
+      "Bash(git checkout *)"
+    ]
+  }
+}

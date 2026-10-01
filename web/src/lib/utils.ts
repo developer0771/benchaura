@@ -66,6 +66,44 @@ export function clamp(value: number, min: number, max: number): number {
 }
 
 /**
+ * Deterministic gradient for an avatar bubble based on a stable key (uid or name).
+ * Same key → same gradient, so a user's bubble color is consistent everywhere.
+ */
+export function avatarGradient(key: string): string {
+  const palettes = [
+    'linear-gradient(135deg,#00c896,#22d3ee)',
+    'linear-gradient(135deg,#f59e0b,#ef4444)',
+    'linear-gradient(135deg,#8b5cf6,#ec4899)',
+    'linear-gradient(135deg,#10b981,#3b82f6)',
+    'linear-gradient(135deg,#f472b6,#7c5cff)',
+    'linear-gradient(135deg,#22d3ee,#7c5cff)',
+    'linear-gradient(135deg,#fbbf24,#f472b6)',
+    'linear-gradient(135deg,#00c896,#7c5cff)',
+  ];
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  return palettes[Math.abs(hash) % palettes.length];
+}
+
+/**
+ * Format a Firestore-ish timestamp (Firestore Timestamp | Date | null) to "HH:MM" local time.
+ */
+export function formatChatTime(ts: unknown): string {
+  if (!ts) return '';
+  let date: Date | null = null;
+  if (ts instanceof Date) {
+    date = ts;
+  } else if (typeof ts === 'object' && ts !== null && 'seconds' in ts) {
+    const seconds = (ts as { seconds: number }).seconds;
+    if (typeof seconds === 'number') date = new Date(seconds * 1000);
+  }
+  if (!date) return '';
+  const h = String(date.getHours()).padStart(2, '0');
+  const m = String(date.getMinutes()).padStart(2, '0');
+  return `${h}:${m}`;
+}
+
+/**
  * Debounce a function call.
  */
 export function debounce<T extends (...args: unknown[]) => void>(

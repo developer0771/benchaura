@@ -27,9 +27,9 @@
 //    roomHistory: string[]               last 10 room codes
 
 import {
-  doc, setDoc, getDoc, updateDoc, deleteDoc,
+  doc, setDoc, getDoc, updateDoc, deleteDoc, runTransaction,
   collection, addDoc, query, orderBy, limit,
-  onSnapshot, serverTimestamp, arrayUnion, arrayRemove,
+  onSnapshot, serverTimestamp,
   DocumentSnapshot, Timestamp,
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -82,8 +82,7 @@ export async function createRoom(
   const roomRef = doc(db, 'rooms', roomCode);
   const existing = await getDoc(roomRef);
 
-  // If a room with this code already exists and is active, reject
-  if (existing.exists() && existing.data().isActive) {
+  if (existing.exists()) {
     throw new Error(`Room ${roomCode} already exists. Refresh to get a new code.`);
   }
 
@@ -101,58 +100,55 @@ export async function createRoom(
 }
 
 /**
- * Join an existing room. Validates the room exists and is active.
- * Uses arrayUnion so concurrent joins don't overwrite each other.
+ * Join an existing room. A transaction preserves concurrent joins and
+ * replaces a previous entry for the same user on rejoin.
  */
 export async function joinRoom(
   roomCode: string,
   participant: { uid: string; name: string }
 ): Promise<Room> {
   const roomRef = doc(db, 'rooms', roomCode.toUpperCase());
-  const snap = await getDoc(roomRef);
+  return runTransaction(db, async transaction => {
+    const snap = await transaction.get(roomRef);
+    if (!snap.exists()) {
+      throw new Error(`Room "${roomCode}" not found. Check the code and try again.`);
+    }
 
-  if (!snap.exists()) {
-    throw new Error(`Room "${roomCode}" not found. Check the code and try again.`);
-  }
-
-  const room = snap.data() as Room;
-  if (!room.isActive) {
-    throw new Error('This room has ended.');
-  }
-
-  // Add participant (arrayUnion is idempotent by object equality in Firestore)
-  await updateDoc(roomRef, {
-    participants: arrayUnion({
+    const room = snap.data() as Room;
+    const participants = (room.participants || []).filter(current => current.uid !== participant.uid);
+    participants.push({
       uid: participant.uid,
       name: participant.name,
-      joinedAt: new Date(),
-    }),
-  });
+      joinedAt: new Date() as unknown as Timestamp,
+    });
 
-  return room;
+    transaction.update(roomRef, { participants, isActive: true });
+    return { ...room, isActive: true, participants };
+  });
 }
 
 /**
  * Leave a room. Removes participant from the array.
- * If the host leaves, marks the room as inactive.
+ * Leaving never ends the room — the unique code stays valid so the host
+ * (or anyone with the link) can rejoin. The `isHost` arg is kept in the
+ * signature for callers but no longer changes behavior.
  */
 export async function leaveRoom(
   roomCode: string,
   uid: string,
-  isHost: boolean
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _isHost: boolean
 ): Promise<void> {
   const roomRef = doc(db, 'rooms', roomCode);
-  const snap = await getDoc(roomRef);
-  if (!snap.exists()) return;
+  await runTransaction(db, async transaction => {
+    const snap = await transaction.get(roomRef);
+    if (!snap.exists()) return;
 
-  const room = snap.data() as Room;
-  const updatedParticipants = room.participants.filter(p => p.uid !== uid);
-
-  if (isHost) {
-    await updateDoc(roomRef, { isActive: false, participants: updatedParticipants });
-  } else {
-    await updateDoc(roomRef, { participants: updatedParticipants });
-  }
+    const room = snap.data() as Room;
+    transaction.update(roomRef, {
+      participants: (room.participants || []).filter(participant => participant.uid !== uid),
+    });
+  });
 }
 
 /**

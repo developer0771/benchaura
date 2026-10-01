@@ -12,11 +12,14 @@ import {
   signInWithEmailAndPassword,
   updateProfile,
   signOut,
+  GoogleAuthProvider,
+  signInWithPopup,
 } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { createRoom, joinRoom, upsertUserProfile, addToRoomHistory } from '@/lib/firestore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { generateRoomCode, isValidRoomCode } from '@/lib/utils';
+import { Icon } from '@/components/ui/Icon';
 
 type RoomTab  = 'create' | 'join';
 type AuthMode = 'login'  | 'register';
@@ -32,7 +35,7 @@ export default function JoinPage() {
 function JoinPageContent() {
   const router      = useRouter();
   const searchParams = useSearchParams();
-  const { setStudent, firebaseUser } = useAuthStore();
+  const { setFirebaseUser, setStudent, firebaseUser } = useAuthStore();
 
   const [tab,      setTab]      = useState<RoomTab>('create');
   const [authMode, setAuthMode] = useState<AuthMode>('login');
@@ -42,13 +45,17 @@ function JoinPageContent() {
   const [email,     setEmail]     = useState('');
   const [password,  setPassword]  = useState('');
   const [course,    setCourse]    = useState('');
-  const [roomCode,  setRoomCode]  = useState(() => generateRoomCode());
+  const [roomCode,  setRoomCode]  = useState('');
   const [joinCode,  setJoinCode]  = useState('');
 
   // UI state
   const [isLoading, setIsLoading] = useState(false);
   const [errors,    setErrors]    = useState<Record<string, string>>({});
   const [showPass,  setShowPass]  = useState(false);
+
+  useEffect(() => {
+    setRoomCode(generateRoomCode());
+  }, []);
 
   // ── Pre-fill join code from share link (?room=XX0-ABCD) ──────────────────
   useEffect(() => {
@@ -104,6 +111,7 @@ function JoinPageContent() {
 
     if (tab === 'create') {
       if (!course.trim()) e.course = 'Course is required';
+      if (!roomCode) e.general = 'Room code is still being prepared. Try again in a moment.';
     } else {
       if (!joinCode.trim()) e.joinCode = 'Room code is required';
       else if (!isValidRoomCode(joinCode)) e.joinCode = 'Invalid format (e.g. CS4-AB2X)';
@@ -163,7 +171,14 @@ function JoinPageContent() {
         }
       }
 
-      const userName  = (name.trim() || firebaseUser?.displayName || userEmail.split('@')[0]);
+      const signedInUser = auth.currentUser;
+      if (signedInUser) {
+        setFirebaseUser(signedInUser);
+        uid = signedInUser.uid;
+        userEmail = signedInUser.email || userEmail;
+      }
+
+      const userName  = (name.trim() || signedInUser?.displayName || firebaseUser?.displayName || userEmail.split('@')[0]);
       const userCourse = course.trim() || 'Not specified';
 
       await upsertUserProfile(uid!, { name: userName, email: userEmail, course: userCourse });
@@ -183,6 +198,35 @@ function JoinPageContent() {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
       setErrors({ general: message });
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  // ── Google Sign-In ────────────────────────────────────────────────────────
+  async function handleGoogleSignIn() {
+    setIsLoading(true);
+    setErrors({});
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      const cred = await signInWithPopup(auth, provider);
+      // Pre-fill name and email from Google profile
+      if (cred.user.displayName) setName(cred.user.displayName);
+      if (cred.user.email)       setEmail(cred.user.email);
+      // User is now authenticated. They still fill in course / room code and click submit.
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code;
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        // User dismissed — not an error worth showing
+      } else if (code === 'auth/popup-blocked') {
+        setErrors({ general: 'Popup was blocked by your browser. Please allow popups and try again.' });
+      } else if (code === 'auth/account-exists-with-different-credential') {
+        setErrors({ general: 'An account already exists with this email using a different sign-in method.' });
+      } else {
+        const message = err instanceof Error ? err.message : 'Google sign-in failed. Please try again.';
+        setErrors({ general: message });
+      }
     } finally {
       setIsLoading(false);
     }
@@ -230,14 +274,14 @@ function JoinPageContent() {
                 className={`auth-mode-btn${authMode === 'login' ? ' active' : ''}`}
                 onClick={() => setAuthMode('login')}
               >
-                🔑 Login
+                <Icon name="key" size={16} /> Login
               </button>
               <button
                 type="button"
                 className={`auth-mode-btn${authMode === 'register' ? ' active' : ''}`}
                 onClick={() => setAuthMode('register')}
               >
-                ✨ Register
+                <Icon name="sparkle" size={16} /> Register
               </button>
             </div>
           )}
@@ -301,9 +345,27 @@ function JoinPageContent() {
               </div>
             )}
 
-            {/* ── Email + Password (only if not signed in) ──────────────── */}
+            {/* ── Google Sign-In (only if not signed in) ────────────────── */}
             {!firebaseUser && (
               <>
+                <button
+                  type="button"
+                  className="google-btn"
+                  onClick={handleGoogleSignIn}
+                  disabled={isLoading}
+                  aria-label="Continue with Google"
+                >
+                  <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+                    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+                  </svg>
+                  <span>Continue with Google</span>
+                </button>
+
+                <div className="auth-divider"><span>or continue with email</span></div>
+
                 <div className="form-group">
                   <label htmlFor="email">Email</label>
                   <input id="email" type="email"
@@ -370,9 +432,11 @@ function JoinPageContent() {
                 <div className="form-group room-code-group">
                   <label>Your Room Code</label>
                   <div className="room-code-display">
-                    <span className="code-text">{roomCode}</span>
+                    <span className="code-text">{roomCode || 'Preparing...'}</span>
                     <button type="button" className="refresh-btn" title="Generate new code"
-                      onClick={() => setRoomCode(generateRoomCode())}>↻</button>
+                      onClick={() => setRoomCode(generateRoomCode())}>
+                      <Icon name="refresh" size={16} />
+                    </button>
                   </div>
                   <p className="form-hint">Share this code with your classmates.</p>
                 </div>
@@ -394,15 +458,25 @@ function JoinPageContent() {
               </div>
             )}
 
-            <button type="submit" className="btn btn-primary btn-full" disabled={isLoading}>
+            <button type="submit" className="btn btn-primary btn-full btn-lg" disabled={isLoading}>
               {isLoading ? (
                 <><div className="btn-spinner" /> Please wait…</>
-              ) : firebaseUser ? (
-                tab === 'create' ? '🚀 Create Room' : '🚀 Join Room'
-              ) : authMode === 'login' ? (
-                tab === 'create' ? '🔑 Login & Create Room' : '🔑 Login & Join Room'
               ) : (
-                tab === 'create' ? '✨ Register & Create Room' : '✨ Register & Join Room'
+                <>
+                  {firebaseUser
+                    ? <Icon name="arrowRight" size={18} />
+                    : authMode === 'login'
+                      ? <Icon name="key" size={18} />
+                      : <Icon name="sparkle" size={18} />
+                  }
+                  <span>
+                    {firebaseUser
+                      ? (tab === 'create' ? 'Create Room' : 'Join Room')
+                      : authMode === 'login'
+                        ? (tab === 'create' ? 'Login & Create Room' : 'Login & Join Room')
+                        : (tab === 'create' ? 'Register & Create Room' : 'Register & Join Room')}
+                  </span>
+                </>
               )}
             </button>
           </form>
@@ -412,12 +486,12 @@ function JoinPageContent() {
         <div className="join-info">
           <h3>What you get</h3>
           <ul className="info-list">
-            <li><span className="info-icon">🎥</span> HD video for up to 8 participants</li>
-            <li><span className="info-icon">💬</span> Real-time group chat</li>
-            <li><span className="info-icon">🖥️</span> Screen sharing</li>
-            <li><span className="info-icon">🔐</span> Private room with unique code</li>
-            <li><span className="info-icon">📱</span> Works on any device</li>
-            <li><span className="info-icon">🔗</span> Share invite link with one click</li>
+            <li><span className="info-icon"><Icon name="hd" size={18} /></span> HD video for up to 8 participants</li>
+            <li><span className="info-icon"><Icon name="chat" size={18} /></span> Real-time group chat</li>
+            <li><span className="info-icon"><Icon name="screen" size={18} /></span> Screen sharing</li>
+            <li><span className="info-icon"><Icon name="lock" size={18} /></span> Private room with unique code</li>
+            <li><span className="info-icon"><Icon name="devices" size={18} /></span> Works on any device</li>
+            <li><span className="info-icon"><Icon name="link" size={18} /></span> Share invite link with one click</li>
           </ul>
           <div className="privacy-note">
             🔒 Your data is stored in Firebase Firestore and used only for this session.

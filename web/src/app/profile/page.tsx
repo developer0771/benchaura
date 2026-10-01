@@ -10,6 +10,7 @@ import { auth } from '@/lib/firebase';
 import { getUserProfile, type UserProfile } from '@/lib/firestore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { getInitials } from '@/lib/utils';
+import { Icon } from '@/components/ui/Icon';
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -89,15 +90,15 @@ export default function ProfilePage() {
 
           {/* Details */}
           <div className="profile-details">
-            {[
-              { icon: '📧', label: 'Email',      value: student.email },
-              { icon: '🏫', label: 'Course',     value: student.course },
-              { icon: '🔑', label: 'Current Room', value: student.currentRoomCode || '—' },
-              { icon: '👑', label: 'Role',       value: student.isHost ? '🎓 Room Host' : '👤 Participant' },
-              { icon: '✅', label: 'Auth Status', value: firebaseUser ? '🟢 Signed in' : '🔴 Not verified' },
-            ].map(({ icon, label, value }) => (
+            {([
+              { icon: 'mail',  label: 'Email',        value: student.email },
+              { icon: 'user',  label: 'Course',       value: student.course },
+              { icon: 'key',   label: 'Current Room', value: student.currentRoomCode || '—' },
+              { icon: 'crown', label: 'Role',         value: student.isHost ? 'Room Host' : 'Participant' },
+              { icon: 'shield', label: 'Auth Status', value: firebaseUser ? 'Signed in' : 'Not verified' },
+            ] as const).map(({ icon, label, value }) => (
               <div key={label} className="detail-row">
-                <span className="detail-icon">{icon}</span>
+                <span className="detail-icon"><Icon name={icon} size={18} /></span>
                 <div>
                   <span className="detail-label">{label}</span>
                   <span className="detail-value">{value}</span>
@@ -122,12 +123,17 @@ export default function ProfilePage() {
           <div className="profile-actions">
             {student.currentRoomCode && (
               <Link href={`/room/${student.currentRoomCode}`} className="btn btn-primary">
-                Rejoin Room
+                <span>Rejoin Room</span>
+                <Icon name="arrowRight" size={16} />
               </Link>
             )}
-            <Link href="/join" className="btn btn-ghost">New Room</Link>
+            <Link href="/join" className="btn btn-ghost">
+              <Icon name="sparkle" size={16} />
+              <span>New Room</span>
+            </Link>
             <button className="btn btn-danger" onClick={handleSignOut}>
-              Sign Out
+              <Icon name="phoneOff" size={16} />
+              <span>Sign Out</span>
             </button>
           </div>
         </div>
